@@ -1,0 +1,18 @@
+{
+  "name": "quota-meter",
+  "displayName": "Quota & Speed Meter",
+  "version": "1.0.0",
+  "description": "Đồng hồ đo quota từng nhóm model theo thời gian thực (cửa sổ 5 giờ & 7 ngày) và tốc độ token/s live kèm animation pixel dễ thương trên Side Pane và Sidebar.",
+  "logo": "assets/logo.svg",
+  "author": {
+    "name": "xomno01",
+    "url": "https://github.com/xomno01"
+  },
+  "homepage": "https://github.com/xomno01/antigravity-quota-meter",
+  "repository": "https://github.com/xomno01/antigravity-quota-meter",
+  "suggestedPrompts": [
+    "Mở đồng hồ Quota & Token/s realtime",
+    "Xem tốc độ token/s và quota 5 giờ hiện tại của từng model",
+    "Kiểm tra nhóm model nào đang dùng nhiều quota nhất tuần này"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "quota-meter",
+  "version": "1.0.0",
+  "description": "Native Antigravity MCP App plugin for real-time per-model-group quota clocks (5h & 7d) and live tokens/sec telemetry with cute pixel animation.",
+  "type": "module",
+  "scripts": {
+    "build:ui": "node ui-src/build.mjs",
+    "start": "node server/index.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "latest",
+    "esbuild": "^0.25.0"
+  }
+}

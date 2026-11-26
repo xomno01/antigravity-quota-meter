@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" shape-rendering="crispEdges">
+  <!-- Outer circular pixel gauge frame (~10% empty margin) -->
+  <rect x="40" y="14" width="48" height="8" fill="#10b981"/>
+  <rect x="24" y="22" width="16" height="8" fill="#10b981"/>
+  <rect x="88" y="22" width="16" height="8" fill="#f59e0b"/>
+  <rect x="16" y="30" width="8" height="16" fill="#10b981"/>
+  <rect x="104" y="30" width="8" height="16" fill="#f59e0b"/>
+  <rect x="12" y="46" width="8" height="32" fill="#38bdf8"/>
+  <rect x="108" y="46" width="8" height="32" fill="#ef4444"/>
+  <rect x="16" y="78" width="8" height="16" fill="#38bdf8"/>
+  <rect x="104" y="78" width="8" height="16" fill="#ef4444"/>
+
+  <!-- Inner dial background -->
+  <rect x="28" y="30" width="72" height="64" fill="#131720" opacity="0.92"/>
+  <rect x="36" y="22" width="56" height="8" fill="#131720" opacity="0.92"/>
+
+  <!-- Tick marks -->
+  <rect x="32" y="64" width="8" height="4" fill="#38bdf8"/>
+  <rect x="40" y="44" width="8" height="4" fill="#10b981"/>
+  <rect x="62" y="34" width="4" height="8" fill="#10b981"/>
+  <rect x="80" y="44" width="8" height="4" fill="#f59e0b"/>
+  <rect x="88" y="64" width="8" height="4" fill="#ef4444"/>
+
+  <!-- Pixel needle pointing high right -->
+  <rect x="60" y="64" width="8" height="8" fill="#f8fafc"/>
+  <rect x="68" y="56" width="8" height="8" fill="#38bdf8"/>
+  <rect x="76" y="48" width="8" height="8" fill="#38bdf8"/>
+  <rect x="84" y="40" width="6" height="6" fill="#fbbf24"/>
+
+  <!-- Cute pixel cat ears silhouette on dial bottom -->
+  <rect x="44" y="80" width="8" height="8" fill="#fbbf24"/>
+  <rect x="76" y="80" width="8" height="8" fill="#fbbf24"/>
+  <rect x="44" y="88" width="40" height="16" fill="#fef3c7"/>
+  <rect x="52" y="92" width="6" height="6" fill="#0f172a"/>
+  <rect x="70" y="92" width="6" height="6" fill="#0f172a"/>
+  <rect x="60" y="96" width="8" height="4" fill="#fb7185"/>
+
+  <!-- Base bar -->
+  <rect x="24" y="106" width="80" height="8" fill="#10b981"/>
+  <rect x="32" y="108" width="44" height="4" fill="#38bdf8"/>
+</svg>
