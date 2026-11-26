@@ -1,6 +1,6 @@
 {
   "name": "quota-meter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Native Antigravity MCP App plugin for real-time per-model-group quota clocks (5h & 7d) and live tokens/sec telemetry with cute pixel animation.",
   "type": "module",
   "scripts": {

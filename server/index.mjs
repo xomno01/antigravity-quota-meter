@@ -47,7 +47,7 @@ function fmtCountdown(sec) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
 
-function formatSummaryText(snapshot, windowKey = '5h') {
+function formatSummaryText(snapshot) {
   const sp = snapshot.speed;
   const speedStr =
     sp.currentTokPerSec > 0
@@ -57,16 +57,16 @@ function formatSummaryText(snapshot, windowKey = '5h') {
         : 'Chưa có mẫu';
 
   const lines = [
-    `Quota & Speed Meter (${windowKey === '7d' ? 'Cửa sổ 7 ngày' : 'Cửa sổ 5 giờ'})`,
+    'Quota & Speed Meter (2 nhóm quota dùng chung)',
     `- Tốc độ hiện tại: ${speedStr} | Trung bình: ${sp.avgTokPerSec} tok/s | Đỉnh 5h: ${sp.peakTokPerSec} tok/s | Tốc độ 5m: ${fmtCompact(sp.tokensPerMin5m)} out/phút`,
     `- Model gần nhất: ${snapshot.activeModel || 'Chưa xác định'} (trạng thái: ${snapshot.activityState})`,
   ];
 
   for (const b of snapshot.buckets) {
-    const w = windowKey === '7d' ? b.w7d : b.w5h;
-    const modeTag = w.sourceMode === 'synced' ? 'đã đồng bộ' : 'mốc mặc định';
+    const tag5h = b.w5h.sourceMode === 'synced' ? 'đã đồng bộ' : 'mốc mặc định';
+    const tag7d = b.w7d.sourceMode === 'synced' ? 'đã đồng bộ' : 'mốc mặc định';
     lines.push(
-      `- ${b.label}: còn ${w.remainingPct}% (${modeTag}) | Đã dùng ${fmtCompact(w.total)} / ${fmtCompact(w.limit)} | Reset: ${fmtCountdown(w.nextResetInSec)}`
+      `- ${b.label}: 5h còn ${b.w5h.remainingPct}% (${tag5h}, ${fmtCompact(b.w5h.total)}/${fmtCompact(b.w5h.limit)}, reset ${fmtCountdown(b.w5h.nextResetInSec)}) | Tuần còn ${b.w7d.remainingPct}% (${tag7d}, ${fmtCompact(b.w7d.total)}/${fmtCompact(b.w7d.limit)}, reset ${fmtCountdown(b.w7d.nextResetInSec)})`
     );
   }
   return lines.join('\n');
@@ -91,7 +91,7 @@ const engine = new QuotaTelemetryEngine({
 const server = new McpServer(
   {
     name: 'quota-meter',
-    version: '1.0.0',
+    version: '1.1.0',
   },
   {
     capabilities: {
@@ -105,7 +105,7 @@ server.registerResource(
   'Quota & Speed Meter HUD',
   APP_URI,
   {
-    description: 'Real-time per-model-group quota clocks (5h & 7d) and live tokens/sec telemetry HUD with pixel-art animation.',
+    description: 'Real-time shared-pool quota clocks (5h & Weekly) and live tokens/sec telemetry HUD with pixel-art animation.',
     mimeType: APP_MIME_TYPE,
     _meta: {
       ui: {
@@ -134,12 +134,8 @@ server.registerTool(
   {
     title: 'Quota Meter',
     description:
-      'Open the real-time Quota & Speed Meter HUD showing per-model-group quota clocks (5-hour and 7-day rolling windows), live tokens/sec speedometer, and pixel animation.',
+      'Open the real-time Quota & Speed Meter HUD showing shared Gemini and Claude/GPT quota clocks (5h & Weekly), live tokens/sec speedometer, and pixel animation.',
     inputSchema: z.object({
-      window: z
-        .enum(['5h', '7d'])
-        .optional()
-        .describe('Initial quota window to display (default: 5h)'),
       bucket: z
         .string()
         .optional()
@@ -158,13 +154,11 @@ server.registerTool(
     },
   },
   async (args = {}) => {
-    const windowKey = args.window === '7d' ? '7d' : '5h';
     const snapshot = engine.getSnapshot();
     return {
-      content: [{ type: 'text', text: formatSummaryText(snapshot, windowKey) }],
+      content: [{ type: 'text', text: formatSummaryText(snapshot) }],
       structuredContent: {
         initialParams: {
-          window: windowKey,
           bucket: args.bucket || '',
         },
         snapshot,
@@ -178,19 +172,13 @@ server.registerTool(
   {
     title: 'Get Quota & Speed Snapshot',
     description:
-      'Query real-time per-model-group quota usage (5h or 7d rolling window), reset countdowns, and live tokens/sec speed.',
-    inputSchema: z.object({
-      window: z
-        .enum(['5h', '7d'])
-        .optional()
-        .describe('Window to summarize: 5h (default) or 7d'),
-    }),
+      'Query real-time shared-pool quota usage (5h & Weekly), reset countdowns, and live tokens/sec speed.',
+    inputSchema: z.object({}),
   },
-  async (args = {}) => {
-    const windowKey = args.window === '7d' ? '7d' : '5h';
+  async () => {
     const snapshot = engine.getSnapshot();
     return {
-      content: [{ type: 'text', text: formatSummaryText(snapshot, windowKey) }],
+      content: [{ type: 'text', text: formatSummaryText(snapshot) }],
       structuredContent: snapshot,
     };
   }
@@ -221,13 +209,14 @@ server.registerTool(
   'app_save_quota_config',
   {
     title: 'Save Quota Calibration',
-    description: 'Internal app-only tool to calibrate remaining quota % or token limits per model bucket.',
+    description: 'Internal app-only tool to calibrate remaining quota %, reset countdown, or token limits per shared pool.',
     inputSchema: z.object({
       bucketId: z.enum(VALID_BUCKET_IDS),
       limit5h: z.number().positive().optional(),
       limit7d: z.number().positive().optional(),
       syncWindow: z.enum(['5h', '7d']).optional(),
       syncRemainingPct: z.number().min(0).max(100).optional(),
+      syncResetInSec: z.number().nonnegative().optional(),
     }),
     _meta: {
       ui: {
@@ -249,7 +238,7 @@ server.registerTool(
   'app_reset_quota_config',
   {
     title: 'Reset Quota Calibration',
-    description: 'Internal app-only tool to reset quota calibration for one or all model buckets.',
+    description: 'Internal app-only tool to reset quota calibration for one or all shared pools.',
     inputSchema: z.object({
       bucketId: z.enum(VALID_BUCKET_IDS).optional(),
     }),

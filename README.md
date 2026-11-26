@@ -11,10 +11,10 @@ Native **Antigravity MCP App** plugin (`quota-meter`) that mounts into Antigravi
 - **Live `tok/s` Analog Speedometer & Sparkline**:
   - Measures true generation throughput directly from `~/.gemini/antigravity/brain/*/transcript.jsonl` (`output_tokens` across the full turn duration, accurately spanning parallel multi-tool `GENERIC` events).
   - Displays current `tok/s`, 12-turn average, 5-hour peak, 5-minute output rate, a 24-sample sparkline, and the latest 8 turns table.
-- **Per-Model-Group Quota Clocks (5h & 7d Rolling Windows)**:
-  - Tracks **Gemini 4 Neon**, **Gemini 4 Hydrogen**, **Gemini Pro / Argon**, **Gemini Flash**, and **Claude & GPT**.
-  - Live `HH:MM:SS` countdown timers showing when the oldest turn exits each rolling window.
-  - **Quick Sync Calibration (`Đồng bộ`)**: Antigravity does not expose a public backend quota API to plugins, so token counts are measured accurately against configurable default limits (`Mốc mặc định`). Click **Đồng bộ** on any clock to enter your account's actual remaining `%` (or custom 5h/7d token limits) — persisted cleanly in `${PLUGIN_DATA}/quota-config.json` and decremented in real time as new tokens arrive.
+- **Shared-Pool Quota Clocks (5h & Weekly)**:
+  - Matches Antigravity's actual 2 shared quota pools: **Gemini Models** (Neon, Hydrogen, Carbon, Argon, Flash) and **Claude and GPT models** (Claude Opus/Sonnet, GPT-OSS), showing **both `5h limit` and `Weekly limit`** simultaneously with sub-model usage breakdown.
+  - Live `HH:MM:SS` countdown timers showing when each window resets.
+  - **Quick Sync Calibration (`Đồng bộ`)**: Click **Đồng bộ** on any pool to enter your account's exact `%` remaining and reset countdown (e.g., `3h 47m` or `6d 15h`) from Antigravity's `View Usage` — persisted cleanly in `${PLUGIN_DATA}/quota-config.json` and decremented in real time as new tokens arrive.
 - **Reactive Pixel-Art Cockpit ("Bé Turbo")**:
   - Procedural HTML5 Canvas pixel art (zero external images), automatically synced to Antigravity's Dark and Light themes (`prefers-reduced-motion` supported).
   - Reacts live to `idle`, `working`, `burst`, and `< 20%` low-quota states. Click the stage to pet Bé Turbo for pixel hearts, gold orbs, and an immediate telemetry refresh.

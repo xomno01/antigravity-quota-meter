@@ -11,41 +11,17 @@ const SPEED_CURRENT_MAX_AGE_MS = 10 * 60 * 1000;
 
 export const MODEL_BUCKETS = [
   {
-    id: 'gemini-neon',
-    label: 'Gemini 4 Neon',
-    shortLabel: 'Neon',
-    defaultLimit5h: 80_000_000,
-    defaultLimit7d: 600_000_000,
-    iconType: 'neon',
-  },
-  {
-    id: 'gemini-hydrogen',
-    label: 'Gemini 4 Hydrogen',
-    shortLabel: 'Hydrogen',
-    defaultLimit5h: 80_000_000,
-    defaultLimit7d: 600_000_000,
-    iconType: 'hydrogen',
-  },
-  {
-    id: 'gemini-pro',
-    label: 'Gemini Pro / Argon',
-    shortLabel: 'Pro/Argon',
-    defaultLimit5h: 80_000_000,
-    defaultLimit7d: 600_000_000,
-    iconType: 'pro',
-  },
-  {
-    id: 'gemini-flash',
-    label: 'Gemini Flash',
-    shortLabel: 'Flash',
-    defaultLimit5h: 160_000_000,
-    defaultLimit7d: 1_200_000_000,
-    iconType: 'flash',
+    id: 'gemini-models',
+    label: 'Gemini Models',
+    shortLabel: 'Gemini',
+    defaultLimit5h: 100_000_000,
+    defaultLimit7d: 780_000_000,
+    iconType: 'gemini',
   },
   {
     id: 'claude-gpt',
-    label: 'Claude & GPT',
-    shortLabel: 'Claude/GPT',
+    label: 'Claude and GPT models',
+    shortLabel: 'Claude & GPT',
     defaultLimit5h: 60_000_000,
     defaultLimit7d: 450_000_000,
     iconType: 'claude',
@@ -55,7 +31,7 @@ export const MODEL_BUCKETS = [
     label: 'Khác / Legacy',
     shortLabel: 'Khác',
     defaultLimit5h: 100_000_000,
-    defaultLimit7d: 800_000_000,
+    defaultLimit7d: 780_000_000,
     iconType: 'other',
   },
 ];
@@ -65,10 +41,7 @@ export const VALID_BUCKET_IDS = MODEL_BUCKETS.map((b) => b.id);
 
 export function classifyModel(modelId) {
   const m = String(modelId || '').trim();
-  if (/neon/i.test(m)) return 'gemini-neon';
-  if (/hydrogen/i.test(m)) return 'gemini-hydrogen';
-  if (/flash/i.test(m)) return 'gemini-flash';
-  if (/argon|pro|ultra/i.test(m)) return 'gemini-pro';
+  if (/gemini|neon|carbon|argon|hydrogen|flash|pro|ultra/i.test(m)) return 'gemini-models';
   if (/claude|sonnet|opus|haiku|gpt|\bo[134]\b/i.test(m)) return 'claude-gpt';
   return 'other';
 }
@@ -82,9 +55,43 @@ export function formatModelName(modelId) {
       if (/^\d+(\.\d+)?$/.test(part)) return part;
       if (part === 'xhigh') return 'xHigh';
       if (part === 'gpt') return 'GPT';
+      if (part === 'oss') return 'OSS';
       return part.charAt(0).toUpperCase() + part.slice(1);
     })
     .join(' ');
+}
+
+export function parseResetDuration(input) {
+  if (typeof input === 'number' && Number.isFinite(input) && input >= 0) {
+    return Math.round(input);
+  }
+  const str = String(input || '').trim().toLowerCase();
+  if (!str) return null;
+  if (/^\d+$/.test(str)) return Number(str);
+
+  let totalSec = 0;
+  let matched = false;
+  const regex = /(\d+(?:\.\d+)?)\s*(d|ngày|h|giờ|m|phút|s|giây)/g;
+  let m;
+  while ((m = regex.exec(str)) !== null) {
+    matched = true;
+    const val = Number(m[1]);
+    const unit = m[2];
+    if (unit === 'd' || unit === 'ngày') totalSec += val * 86400;
+    else if (unit === 'h' || unit === 'giờ') totalSec += val * 3600;
+    else if (unit === 'm' || unit === 'phút') totalSec += val * 60;
+    else if (unit === 's' || unit === 'giây') totalSec += val;
+  }
+  if (matched) return Math.round(totalSec);
+
+  const hhmm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(str);
+  if (hhmm) {
+    const h = Number(hhmm[1]);
+    const min = Number(hhmm[2]);
+    const sec = Number(hhmm[3] || 0);
+    return h * 3600 + min * 60 + sec;
+  }
+  return null;
 }
 
 function clamp(val, min, max) {
@@ -99,6 +106,21 @@ function calcCacheHitRate(input, cacheRead) {
   const totalIn = input + cacheRead;
   if (totalIn <= 0) return 0;
   return round1((cacheRead / totalIn) * 100);
+}
+
+function sanitizeSyncAnchor(anchor) {
+  if (!anchor || typeof anchor !== 'object') return null;
+  const pct = Number(anchor.syncedRemainingPct);
+  const at = Number(anchor.syncedAtMs);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100 || !Number.isFinite(at) || at <= 0) {
+    return null;
+  }
+  const out = { syncedRemainingPct: round1(pct), syncedAtMs: at };
+  const resetAt = Number(anchor.resetAtMs);
+  if (Number.isFinite(resetAt) && resetAt > 0) {
+    out.resetAtMs = resetAt;
+  }
+  return out;
 }
 
 export class QuotaTelemetryEngine {
@@ -118,14 +140,14 @@ export class QuotaTelemetryEngine {
   }
 
   loadConfig() {
-    const base = { version: 1, buckets: {} };
+    const base = { version: 2, buckets: {} };
     try {
       if (!fs.existsSync(this.configFile)) return base;
       const parsed = JSON.parse(fs.readFileSync(this.configFile, 'utf8'));
       if (!parsed || typeof parsed !== 'object' || typeof parsed.buckets !== 'object') {
         return base;
       }
-      const sanitized = { version: 1, buckets: {} };
+      const sanitized = { version: 2, buckets: {} };
       for (const [id, cfg] of Object.entries(parsed.buckets)) {
         if (!BUCKET_MAP.has(id) || !cfg || typeof cfg !== 'object') continue;
         const entry = {};
@@ -135,20 +157,10 @@ export class QuotaTelemetryEngine {
         if (Number.isFinite(cfg.limit7d) && cfg.limit7d > 0) {
           entry.limit7d = Math.round(cfg.limit7d);
         }
-        if (cfg.sync5h && typeof cfg.sync5h === 'object') {
-          const pct = Number(cfg.sync5h.syncedRemainingPct);
-          const at = Number(cfg.sync5h.syncedAtMs);
-          if (Number.isFinite(pct) && pct >= 0 && pct <= 100 && Number.isFinite(at) && at > 0) {
-            entry.sync5h = { syncedRemainingPct: round1(pct), syncedAtMs: at };
-          }
-        }
-        if (cfg.sync7d && typeof cfg.sync7d === 'object') {
-          const pct = Number(cfg.sync7d.syncedRemainingPct);
-          const at = Number(cfg.sync7d.syncedAtMs);
-          if (Number.isFinite(pct) && pct >= 0 && pct <= 100 && Number.isFinite(at) && at > 0) {
-            entry.sync7d = { syncedRemainingPct: round1(pct), syncedAtMs: at };
-          }
-        }
+        const s5 = sanitizeSyncAnchor(cfg.sync5h);
+        if (s5) entry.sync5h = s5;
+        const s7 = sanitizeSyncAnchor(cfg.sync7d);
+        if (s7) entry.sync7d = s7;
         sanitized.buckets[id] = entry;
       }
       return sanitized;
@@ -164,7 +176,14 @@ export class QuotaTelemetryEngine {
     fs.renameSync(tmp, this.configFile);
   }
 
-  saveBucketConfig({ bucketId, limit5h, limit7d, syncWindow, syncRemainingPct } = {}) {
+  saveBucketConfig({
+    bucketId,
+    limit5h,
+    limit7d,
+    syncWindow,
+    syncRemainingPct,
+    syncResetInSec,
+  } = {}) {
     if (!BUCKET_MAP.has(bucketId)) {
       throw new Error(`Invalid bucketId: ${bucketId}`);
     }
@@ -181,7 +200,12 @@ export class QuotaTelemetryEngine {
       if (!Number.isFinite(n) || n <= 0) throw new Error('limit7d must be > 0');
       cur.limit7d = Math.round(n);
     }
-    if (syncWindow !== undefined && syncWindow !== null && syncRemainingPct !== undefined && syncRemainingPct !== null) {
+    if (
+      syncWindow !== undefined &&
+      syncWindow !== null &&
+      syncRemainingPct !== undefined &&
+      syncRemainingPct !== null
+    ) {
       if (syncWindow !== '5h' && syncWindow !== '7d') {
         throw new Error('syncWindow must be 5h or 7d');
       }
@@ -189,10 +213,17 @@ export class QuotaTelemetryEngine {
       if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
         throw new Error('syncRemainingPct must be between 0 and 100');
       }
+      const now = Date.now();
       const anchor = {
         syncedRemainingPct: round1(pct),
-        syncedAtMs: Date.now(),
+        syncedAtMs: now,
       };
+      if (syncResetInSec !== undefined && syncResetInSec !== null) {
+        const sec = Number(syncResetInSec);
+        if (Number.isFinite(sec) && sec > 0) {
+          anchor.resetAtMs = now + Math.round(sec) * 1000;
+        }
+      }
       if (syncWindow === '5h') cur.sync5h = anchor;
       else cur.sync7d = anchor;
     }
@@ -380,7 +411,33 @@ export class QuotaTelemetryEngine {
   }
 
   _computeWindowStats(turns, bucketCfg, defaultLimit, windowMs, now, syncAnchor) {
-    const cutoff = now - windowMs;
+    const limit =
+      bucketCfg && Number.isFinite(bucketCfg) && bucketCfg > 0
+        ? bucketCfg
+        : defaultLimit;
+
+    const hasResetAnchor = Boolean(syncAnchor && Number.isFinite(syncAnchor.resetAtMs));
+    const rolledOver = Boolean(hasResetAnchor && now >= syncAnchor.resetAtMs);
+
+    let cycleStartMs = now - windowMs;
+    if (hasResetAnchor) {
+      if (rolledOver) {
+        // Compute current cycle start after the expired reset boundary
+        const elapsedCycles = Math.floor((now - syncAnchor.resetAtMs) / windowMs);
+        cycleStartMs = syncAnchor.resetAtMs + elapsedCycles * windowMs;
+      } else {
+        cycleStartMs = syncAnchor.resetAtMs - windowMs;
+      }
+    }
+
+    const syncValid = Boolean(
+      syncAnchor &&
+        !rolledOver &&
+        Number.isFinite(syncAnchor.syncedAtMs) &&
+        syncAnchor.syncedAtMs >= cycleStartMs &&
+        syncAnchor.syncedAtMs <= now
+    );
+
     let input = 0;
     let cacheRead = 0;
     let output = 0;
@@ -388,16 +445,10 @@ export class QuotaTelemetryEngine {
     let turnCount = 0;
     let oldestAtMs = 0;
     let deltaSinceSync = 0;
-
-    const syncValid = Boolean(
-      syncAnchor &&
-        Number.isFinite(syncAnchor.syncedAtMs) &&
-        syncAnchor.syncedAtMs >= cutoff &&
-        syncAnchor.syncedAtMs <= now
-    );
+    const subModelMap = new Map();
 
     for (const t of turns) {
-      if (t.atMs < cutoff) continue;
+      if (t.atMs < cycleStartMs) continue;
       input += t.input;
       cacheRead += t.cacheRead;
       output += t.output;
@@ -409,19 +460,29 @@ export class QuotaTelemetryEngine {
       if (syncValid && t.atMs > syncAnchor.syncedAtMs) {
         deltaSinceSync += t.total;
       }
+      const prev = subModelMap.get(t.modelLabel) || { model: t.modelLabel, total: 0, turns: 0 };
+      prev.total += t.total;
+      prev.turns += 1;
+      subModelMap.set(t.modelLabel, prev);
     }
 
-    const limit =
-      bucketCfg && Number.isFinite(bucketCfg) && bucketCfg > 0
-        ? bucketCfg
-        : defaultLimit;
+    const subModels = [...subModelMap.values()]
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 4);
 
-    const nextResetInSec = oldestAtMs
-      ? Math.max(0, Math.round((oldestAtMs + windowMs - now) / 1000))
-      : 0;
-    const nextResetAt = oldestAtMs
-      ? new Date(oldestAtMs + windowMs).toISOString()
-      : '';
+    let nextResetInSec = 0;
+    let nextResetAt = '';
+    if (hasResetAnchor && !rolledOver) {
+      nextResetInSec = Math.max(0, Math.round((syncAnchor.resetAtMs - now) / 1000));
+      nextResetAt = new Date(syncAnchor.resetAtMs).toISOString();
+    } else if (hasResetAnchor && rolledOver) {
+      const nextBoundary = cycleStartMs + windowMs;
+      nextResetInSec = Math.max(0, Math.round((nextBoundary - now) / 1000));
+      nextResetAt = new Date(nextBoundary).toISOString();
+    } else if (oldestAtMs) {
+      nextResetInSec = Math.max(0, Math.round((oldestAtMs + windowMs - now) / 1000));
+      nextResetAt = new Date(oldestAtMs + windowMs).toISOString();
+    }
 
     let remainingPct;
     let usedPct;
@@ -452,6 +513,7 @@ export class QuotaTelemetryEngine {
       nextResetAt,
       sourceMode,
       syncedAt: syncValid ? new Date(syncAnchor.syncedAtMs).toISOString() : '',
+      subModels,
     };
   }
 
@@ -492,7 +554,6 @@ export class QuotaTelemetryEngine {
     allSpeedTurns.sort((a, b) => a.atMs - b.atMs);
     recentTurnsAll.sort((a, b) => b.atMs - a.atMs);
 
-    // Speed metrics
     const speedTail = allSpeedTurns.slice(-24);
     const latestSpeedTurn = allSpeedTurns.length > 0 ? allSpeedTurns[allSpeedTurns.length - 1] : null;
     const isFreshSpeed = Boolean(
@@ -522,7 +583,6 @@ export class QuotaTelemetryEngine {
     const lastKnownTokPerSec = latestSpeedTurn ? latestSpeedTurn.tokPerSec : 0;
     const currentTokPerSec = isFreshSpeed ? lastKnownTokPerSec : 0;
 
-    // Live activity state
     let activityState = 'idle';
     const freshestAge = freshestConv
       ? now - Math.max(freshestConv.mtimeMs, freshestConv.lastEventAtMs)
@@ -550,8 +610,8 @@ export class QuotaTelemetryEngine {
       (freshestConv && freshestConv.activeModel) ||
       (latestPlannerTurn && latestPlannerTurn.model) ||
       '';
+    const activeBucketId = activeModelId ? classifyModel(activeModelId) : '';
 
-    // Buckets summary
     const buckets = [];
     for (const def of MODEL_BUCKETS) {
       const bTurns = turnsByBucket.get(def.id) || [];
@@ -573,8 +633,7 @@ export class QuotaTelemetryEngine {
         bCfg.sync7d
       );
 
-      // Hide 'other' bucket if completely unused in last 7 days
-      if (def.id === 'other' && w7d.total === 0 && !bCfg.sync5h && !bCfg.sync7d) {
+      if (def.id === 'other' && w5h.total === 0 && !bCfg.sync5h && !bCfg.sync7d) {
         continue;
       }
 
@@ -606,6 +665,7 @@ export class QuotaTelemetryEngine {
       activityState,
       activeModel: formatModelName(activeModelId),
       activeModelId,
+      activeBucketId,
       speed: {
         currentTokPerSec,
         lastKnownTokPerSec,

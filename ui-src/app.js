@@ -7,22 +7,19 @@ import { PixelTelemetryStage } from './pixel-stage.js';
 
 const POLL_INTERVAL_MS = 1500;
 const CONNECT_TIMEOUT_MS = 700;
-const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 27; // r = 27 -> ~169.65
+const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 22; // r = 22 -> ~138.23
 
 const state = {
-  windowKey: '5h',
   liveEnabled: true,
   isPolling: false,
   snapshot: null,
   hostConnected: false,
   countdownOffsetSec: 0,
-  lastSnapshotAtMs: 0,
   editingBucketId: '',
 };
 
 const els = {
   subtitle: document.getElementById('status-subtitle'),
-  windowBtns: [...document.querySelectorAll('.switch-btn[data-window]')],
   liveToggleBtn: document.getElementById('live-toggle-btn'),
   refreshBtn: document.getElementById('refresh-btn'),
   errorBanner: document.getElementById('error-banner'),
@@ -40,14 +37,15 @@ const els = {
   speedSparkline: document.getElementById('speed-sparkline'),
   pixelCanvas: document.getElementById('pixel-stage'),
   pixelSpeech: document.getElementById('pixel-speech-text'),
-  quotaTitle: document.getElementById('quota-section-title'),
   quotaGrid: document.getElementById('quota-grid'),
   calibPanel: document.getElementById('calib-panel'),
   calibTitle: document.getElementById('calib-title'),
   calibCloseBtn: document.getElementById('calib-close-btn'),
   calibForm: document.getElementById('calib-form'),
   calibBucketId: document.getElementById('calib-bucket-id'),
+  calibWindow: document.getElementById('calib-window'),
   calibPct: document.getElementById('calib-pct'),
+  calibReset: document.getElementById('calib-reset'),
   calibLimit5h: document.getElementById('calib-limit-5h'),
   calibLimit7d: document.getElementById('calib-limit-7d'),
   calibResetBtn: document.getElementById('calib-reset-btn'),
@@ -71,9 +69,36 @@ function fmtCountdown(sec) {
   const m = Math.floor((s % 3600) / 60);
   const rem = s % 60;
   if (d > 0) {
-    return `${d}d ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return `${d}d ${String(h).padStart(2, '0')}h`;
   }
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
+function parseDurationInput(raw) {
+  const str = String(raw || '').trim().toLowerCase();
+  if (!str) return null;
+  if (/^\d+$/.test(str)) return Number(str);
+
+  let totalSec = 0;
+  let matched = false;
+  const regex = /(\d+(?:\.\d+)?)\s*(d|ngày|h|giờ|m|phút|s|giây)/g;
+  let m;
+  while ((m = regex.exec(str)) !== null) {
+    matched = true;
+    const val = Number(m[1]);
+    const unit = m[2];
+    if (unit === 'd' || unit === 'ngày') totalSec += val * 86400;
+    else if (unit === 'h' || unit === 'giờ') totalSec += val * 3600;
+    else if (unit === 'm' || unit === 'phút') totalSec += val * 60;
+    else if (unit === 's' || unit === 'giây') totalSec += val;
+  }
+  if (matched) return Math.round(totalSec);
+
+  const hhmm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(str);
+  if (hhmm) {
+    return Number(hhmm[1]) * 3600 + Number(hhmm[2]) * 60 + Number(hhmm[3] || 0);
+  }
+  return null;
 }
 
 function fmtLocalTime(isoStr) {
@@ -99,32 +124,12 @@ function showError(msg) {
 
 function bucketEmblemSvg(iconType) {
   const rects = {
-    neon: [
-      ['px-cyan', 2, 0, 4, 1],
-      ['px-cyan', 1, 1, 6, 5],
-      ['px-ink', 2, 2, 4, 3],
-      ['px-amber', 3, 3, 2, 1],
-      ['px-emerald', 2, 6, 4, 1],
-    ],
-    hydrogen: [
-      ['px-emerald', 3, 0, 2, 1],
-      ['px-emerald', 2, 1, 4, 2],
-      ['px-cyan', 1, 3, 6, 3],
-      ['px-ink', 3, 4, 2, 1],
-      ['px-emerald', 2, 6, 4, 1],
-    ],
-    pro: [
-      ['px-amber', 1, 1, 6, 2],
-      ['px-amber', 2, 3, 4, 2],
-      ['px-ink', 3, 3, 2, 1],
-      ['px-emerald', 2, 5, 4, 2],
-    ],
-    flash: [
-      ['px-amber', 4, 0, 3, 2],
-      ['px-amber', 2, 2, 4, 2],
-      ['px-amber', 1, 4, 5, 1],
-      ['px-cyan', 3, 5, 3, 2],
-      ['px-cyan', 2, 7, 2, 1],
+    gemini: [
+      ['px-cyan', 3, 0, 2, 2],
+      ['px-emerald', 2, 2, 4, 1],
+      ['px-cyan', 0, 3, 8, 2],
+      ['px-emerald', 2, 5, 4, 1],
+      ['px-amber', 3, 6, 2, 2],
     ],
     claude: [
       ['px-coral', 2, 1, 4, 1],
@@ -234,12 +239,42 @@ function renderSparkline(history) {
   `;
 }
 
-function renderQuotaGrid(snapshot) {
-  const is7d = state.windowKey === '7d';
-  els.quotaTitle.textContent = is7d
-    ? 'Đồng hồ Quota cửa sổ 7 ngày'
-    : 'Đồng hồ Quota cửa sổ 5 giờ';
+function renderClockSlot(title, w) {
+  const pct = Number(w.remainingPct || 0);
+  const sev = severityClass(pct);
+  const offset = CLOCK_CIRCUMFERENCE * (1 - Math.min(100, Math.max(0, pct)) / 100);
+  const resetSec = Math.max(0, (w.nextResetInSec || 0) - state.countdownOffsetSec);
+  const modeLabel = w.sourceMode === 'synced' ? 'Đã đồng bộ' : 'Mốc mặc định';
 
+  return `
+    <div class="dual-clock-slot">
+      <svg class="clock-svg" viewBox="0 0 56 56" aria-label="${title} còn lại ${pct}%">
+        <circle class="clock-ring-track" cx="28" cy="28" r="22" />
+        <circle
+          class="clock-ring-val ${sev}"
+          cx="28"
+          cy="28"
+          r="22"
+          stroke-dasharray="${CLOCK_CIRCUMFERENCE.toFixed(2)}"
+          stroke-dashoffset="${offset.toFixed(2)}"
+        />
+      </svg>
+      <div class="clock-figures">
+        <div class="clock-pct-row">
+          <span class="clock-win-label">${title}</span>
+          <span class="clock-mode">${modeLabel}</span>
+        </div>
+        <div class="clock-pct-row">
+          <span class="clock-pct">${pct.toFixed(1)}%</span>
+          <span class="clock-usage-line">${fmtCompact(w.total)} / ${fmtCompact(w.limit)}</span>
+        </div>
+        <span class="clock-reset-line" data-reset-base="${w.nextResetInSec}">Reset: ${fmtCountdown(resetSec)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderQuotaGrid(snapshot) {
   const buckets = snapshot.buckets || [];
   if (buckets.length === 0) {
     els.quotaGrid.innerHTML =
@@ -247,22 +282,16 @@ function renderQuotaGrid(snapshot) {
     return;
   }
 
-  const activeBucket = snapshot.activeModelId
-    ? buckets.find((b) =>
-        snapshot.activeModel.toLowerCase().includes(b.shortLabel.toLowerCase())
-      )?.id || ''
-    : '';
+  const activeBucket = snapshot.activeBucketId || '';
 
   els.quotaGrid.innerHTML = buckets
     .map((b) => {
-      const w = is7d ? b.w7d : b.w5h;
-      const pct = Number(w.remainingPct || 0);
-      const sev = severityClass(pct);
-      const offset = CLOCK_CIRCUMFERENCE * (1 - Math.min(100, Math.max(0, pct)) / 100);
-      const scaleX = (Math.min(100, Math.max(0, pct)) / 100).toFixed(4);
-      const resetSec = Math.max(0, (w.nextResetInSec || 0) - state.countdownOffsetSec);
-      const modeLabel = w.sourceMode === 'synced' ? 'Đã đồng bộ' : 'Mốc mặc định';
       const activeCls = b.id === activeBucket ? ' is-active-bucket' : '';
+      const subModels = (b.w5h?.subModels?.length ? b.w5h.subModels : b.w7d?.subModels) || [];
+      const subText =
+        subModels.length > 0
+          ? subModels.map((m) => `${m.model} (${fmtCompact(m.total)})`).join(', ')
+          : 'Chưa phát sinh lượt trong chu kỳ hiện tại';
 
       return `
         <article class="quota-tile${activeCls}" data-bucket-id="${b.id}">
@@ -273,33 +302,13 @@ function renderQuotaGrid(snapshot) {
             </div>
             <button class="calib-trigger" type="button" data-calib-bucket="${b.id}">Đồng bộ</button>
           </div>
-          <div class="quota-clock-body">
-            <svg class="clock-svg" viewBox="0 0 68 68" aria-label="Còn lại ${pct}%">
-              <circle class="clock-ring-track" cx="34" cy="34" r="27" />
-              <circle
-                class="clock-ring-val ${sev}"
-                cx="34"
-                cy="34"
-                r="27"
-                stroke-dasharray="${CLOCK_CIRCUMFERENCE.toFixed(2)}"
-                stroke-dashoffset="${offset.toFixed(2)}"
-              />
-            </svg>
-            <div class="clock-figures">
-              <div class="clock-pct-row">
-                <span class="clock-pct">${pct.toFixed(1)}%</span>
-                <span class="clock-mode">${modeLabel}</span>
-              </div>
-              <span class="clock-usage-line">${fmtCompact(w.total)} / ${fmtCompact(w.limit)}</span>
-              <span class="clock-reset-line" data-reset-base="${w.nextResetInSec}">Reset: ${fmtCountdown(resetSec)}</span>
-            </div>
-          </div>
-          <div class="quota-bar-track" aria-hidden="true">
-            <div class="quota-bar-fill ${sev}" style="transform: scaleX(${scaleX});"></div>
+          <div class="dual-clocks-row">
+            ${renderClockSlot('5h limit', b.w5h)}
+            ${renderClockSlot('Weekly limit', b.w7d)}
           </div>
           <div class="quota-tile-foot">
-            <span>${w.turns} lượt</span>
-            <span>Cache ${w.cacheHitRate}%</span>
+            <span class="submodel-line" title="${subText}">${subText}</span>
+            <span class="cache-line">Cache ${b.w5h.cacheHitRate}%</span>
           </div>
         </article>
       `;
@@ -349,20 +358,19 @@ function renderTurnsTable(snapshot) {
 function renderSnapshot(snapshot) {
   if (!snapshot) return;
   state.snapshot = snapshot;
-  state.lastSnapshotAtMs = Date.now();
   state.countdownOffsetSec = 0;
 
-  const is7d = state.windowKey === '7d';
   const minPct = Math.min(
     100,
-    ...(snapshot.buckets || []).map((b) =>
-      Number((is7d ? b.w7d : b.w5h).remainingPct ?? 100)
-    )
+    ...(snapshot.buckets || []).flatMap((b) => [
+      Number(b.w5h?.remainingPct ?? 100),
+      Number(b.w7d?.remainingPct ?? 100),
+    ])
   );
 
   els.subtitle.textContent = `${
     state.liveEnabled ? 'Live 1.5s' : 'Đang tạm dừng'
-  } — ${snapshot.buckets.length} nhóm model đang theo dõi`;
+  }, ${snapshot.buckets.length} nhóm quota dùng chung`;
 
   renderSpeedometer(snapshot);
   renderQuotaGrid(snapshot);
@@ -375,20 +383,27 @@ function renderSnapshot(snapshot) {
   });
 }
 
+function populateCalibrationFields(bucketId, winKey) {
+  if (!state.snapshot) return;
+  const bucket = state.snapshot.buckets.find((b) => b.id === bucketId);
+  if (!bucket) return;
+  const w = winKey === '7d' ? bucket.w7d : bucket.w5h;
+  els.calibPct.value = String(w.remainingPct);
+  els.calibReset.value = w.nextResetInSec > 0 ? fmtCountdown(w.nextResetInSec) : '';
+  els.calibLimit5h.value = String(bucket.w5h.limit);
+  els.calibLimit7d.value = String(bucket.w7d.limit);
+}
+
 function openCalibration(bucketId) {
   if (!state.snapshot) return;
   const bucket = state.snapshot.buckets.find((b) => b.id === bucketId);
   if (!bucket) return;
 
-  const is7d = state.windowKey === '7d';
-  const curWin = is7d ? bucket.w7d : bucket.w5h;
   state.editingBucketId = bucketId;
-
-  els.calibTitle.textContent = `Hiệu chỉnh ${bucket.label} (${is7d ? '7 ngày' : '5 giờ'})`;
+  els.calibTitle.textContent = `Đồng bộ ${bucket.label}`;
   els.calibBucketId.value = bucket.id;
-  els.calibPct.value = String(curWin.remainingPct);
-  els.calibLimit5h.value = String(bucket.w5h.limit);
-  els.calibLimit7d.value = String(bucket.w7d.limit);
+  els.calibWindow.value = '5h';
+  populateCalibrationFields(bucketId, '5h');
   els.calibPanel.hidden = false;
   els.calibPct.focus();
 }
@@ -404,7 +419,7 @@ const stage = new PixelTelemetryStage(els.pixelCanvas, els.pixelSpeech, {
   },
 });
 
-const app = new App({ name: 'Quota & Speed Meter', version: '1.0.0' }, {});
+const app = new App({ name: 'Quota & Speed Meter', version: '1.1.0' }, {});
 
 function applyThemeFromContext(ctx) {
   if (!ctx) return;
@@ -418,18 +433,9 @@ function applyThemeFromContext(ctx) {
   }
 }
 
-app.ontoolinput = ({ arguments: args }) => {
-  if (args?.window === '7d' || args?.window === '5h') {
-    setWindowKey(args.window, false);
-  }
-};
-
 app.ontoolresult = (result) => {
   const sc = result?.structuredContent;
   if (!sc) return;
-  if (sc.initialParams?.window === '7d' || sc.initialParams?.window === '5h') {
-    setWindowKey(sc.initialParams.window, false);
-  }
   if (sc.snapshot) {
     showError('');
     renderSnapshot(sc.snapshot);
@@ -465,22 +471,6 @@ async function pollNow() {
   }
 }
 
-function setWindowKey(key, rerender = true) {
-  state.windowKey = key === '7d' ? '7d' : '5h';
-  for (const btn of els.windowBtns) {
-    btn.setAttribute('aria-selected', String(btn.dataset.window === state.windowKey));
-  }
-  if (rerender && state.snapshot) {
-    renderQuotaGrid(state.snapshot);
-  }
-}
-
-for (const btn of els.windowBtns) {
-  btn.addEventListener('click', () => {
-    setWindowKey(btn.dataset.window, true);
-  });
-}
-
 els.liveToggleBtn.addEventListener('click', () => {
   state.liveEnabled = !state.liveEnabled;
   els.liveToggleBtn.setAttribute('aria-pressed', String(state.liveEnabled));
@@ -489,7 +479,7 @@ els.liveToggleBtn.addEventListener('click', () => {
   if (state.snapshot) {
     els.subtitle.textContent = `${
       state.liveEnabled ? 'Live 1.5s' : 'Đang tạm dừng'
-    } — ${state.snapshot.buckets.length} nhóm model đang theo dõi`;
+    }, ${state.snapshot.buckets.length} nhóm quota dùng chung`;
   }
 });
 
@@ -507,6 +497,12 @@ els.quotaGrid.addEventListener('click', (e) => {
   openCalibration(btn.getAttribute('data-calib-bucket'));
 });
 
+els.calibWindow.addEventListener('change', () => {
+  if (state.editingBucketId) {
+    populateCalibrationFields(state.editingBucketId, els.calibWindow.value);
+  }
+});
+
 els.calibCloseBtn.addEventListener('click', () => {
   closeCalibration();
 });
@@ -519,12 +515,16 @@ els.calibForm.addEventListener('submit', async (e) => {
 
   const payload = { bucketId };
   const pctVal = Number(els.calibPct.value);
+  const resetSec = parseDurationInput(els.calibReset.value);
   const lim5 = Number(els.calibLimit5h.value);
   const lim7 = Number(els.calibLimit7d.value);
 
   if (Number.isFinite(pctVal) && pctVal >= 0 && pctVal <= 100) {
-    payload.syncWindow = state.windowKey;
+    payload.syncWindow = els.calibWindow.value === '7d' ? '7d' : '5h';
     payload.syncRemainingPct = pctVal;
+    if (resetSec !== null && resetSec >= 0) {
+      payload.syncResetInSec = resetSec;
+    }
   }
   if (Number.isFinite(lim5) && lim5 > 0) payload.limit5h = lim5;
   if (Number.isFinite(lim7) && lim7 > 0) payload.limit7d = lim7;
@@ -563,7 +563,6 @@ els.calibResetBtn.addEventListener('click', async () => {
   }
 });
 
-// Local 1-second timer to keep reset countdowns ticking smoothly between polls
 setInterval(() => {
   if (!state.snapshot) return;
   state.countdownOffsetSec += 1;
@@ -575,7 +574,6 @@ setInterval(() => {
   }
 }, 1000);
 
-// Live 1.5s polling loop
 setInterval(() => {
   if (!state.liveEnabled || !state.hostConnected || document.hidden) return;
   void pollNow();
@@ -597,9 +595,8 @@ async function init() {
       await pollNow();
     }
   } catch {
-    // Graceful standalone preview fallback (no uncaught errors outside MCP host)
     state.hostConnected = false;
-    els.subtitle.textContent = 'Chế độ xem độc lập — mở trong Antigravity Side Pane để đo live';
+    els.subtitle.textContent = 'Chế độ xem độc lập, mở trong Antigravity Side Pane để đo live';
     els.quotaGrid.innerHTML =
       '<div class="quota-tile"><span class="section-hint">Đang chờ kết nối máy chủ MCP Quota Meter từ Antigravity.</span></div>';
     els.turnsTbody.innerHTML =

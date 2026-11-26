@@ -26,7 +26,7 @@ async function build() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Đồng hồ đo quota từng nhóm model theo thời gian thực (5 giờ & 7 ngày) và tốc độ token/s của Antigravity kèm animation pixel Bé Turbo." />
+  <meta name="description" content="Đồng hồ đo quota dùng chung theo thời gian thực (5 giờ & tuần) và tốc độ token/s của Antigravity kèm animation pixel Bé Turbo." />
   <title>Quota & Speed Meter</title>
   <style>${css.trim()}</style>
 </head>
@@ -47,10 +47,6 @@ async function build() {
         <p class="header-subtitle" id="status-subtitle">Đang đồng bộ cảm biến token theo thời gian thực…</p>
       </div>
       <div class="header-controls">
-        <div class="window-switch" role="tablist" aria-label="Khung cửa sổ quota">
-          <button class="switch-btn" role="tab" type="button" data-window="5h" aria-selected="true">5 giờ</button>
-          <button class="switch-btn" role="tab" type="button" data-window="7d" aria-selected="false">7 ngày</button>
-        </div>
         <button class="ctrl-btn is-live" id="live-toggle-btn" type="button" aria-pressed="true">Live 1.5s</button>
         <button class="ctrl-btn" id="refresh-btn" type="button" aria-label="Làm mới dữ liệu">Làm mới</button>
       </div>
@@ -113,13 +109,12 @@ async function build() {
       </div>
     </section>
 
-    <section class="quota-section" aria-label="Đồng hồ quota theo nhóm model">
+    <section class="quota-section" aria-label="Đồng hồ quota dùng chung">
       <div class="section-toolbar">
-        <h2 class="section-title" id="quota-section-title">Đồng hồ Quota cửa sổ 5 giờ</h2>
-        <span class="section-hint" id="quota-mode-hint">Token đo thật từ transcript, bấm Đồng bộ để khớp % tài khoản</span>
+        <h2 class="section-title" id="quota-section-title">Đồng hồ Quota dùng chung</h2>
+        <span class="section-hint" id="quota-mode-hint">Theo đúng 2 nhóm của View Usage, bấm Đồng bộ để khớp % và giờ Reset</span>
       </div>
       <div class="quota-grid" id="quota-grid">
-        <div class="skeleton-row" aria-hidden="true"></div>
         <div class="skeleton-row" aria-hidden="true"></div>
         <div class="skeleton-row" aria-hidden="true"></div>
       </div>
@@ -134,16 +129,26 @@ async function build() {
         <input type="hidden" id="calib-bucket-id" value="" />
         <div class="calib-fields">
           <label class="field-group">
-            <span>Phần trăm còn lại hiện tại (%)</span>
-            <input class="field-input" id="calib-pct" type="number" min="0" max="100" step="0.1" placeholder="Ví dụ: 84.5" />
+            <span>Khung cần đồng bộ</span>
+            <select class="field-input" id="calib-window">
+              <option value="5h">Cửa sổ 5 giờ (5h limit)</option>
+              <option value="7d">Cửa sổ Tuần (Weekly limit)</option>
+            </select>
           </label>
           <label class="field-group">
-            <span>Hạn mức cửa sổ 5 giờ (tokens)</span>
-            <input class="field-input" id="calib-limit-5h" type="number" min="1000" step="100000" />
+            <span>Phần trăm còn lại (%)</span>
+            <input class="field-input" id="calib-pct" type="number" min="0" max="100" step="0.1" placeholder="Ví dụ: 93" />
           </label>
           <label class="field-group">
-            <span>Hạn mức cửa sổ 7 ngày (tokens)</span>
-            <input class="field-input" id="calib-limit-7d" type="number" min="1000" step="1000000" />
+            <span>Reset sau (ví dụ 3h 47m, 6d 15h)</span>
+            <input class="field-input" id="calib-reset" type="text" placeholder="3h 47m hoặc 6d 15h" />
+          </label>
+          <label class="field-group">
+            <span>Hạn mức 5h / Tuần (tokens)</span>
+            <div class="limit-pair">
+              <input class="field-input" id="calib-limit-5h" type="number" min="1000" step="1000000" aria-label="Hạn mức 5 giờ" />
+              <input class="field-input" id="calib-limit-7d" type="number" min="1000" step="10000000" aria-label="Hạn mức tuần" />
+            </div>
           </label>
         </div>
         <div class="calib-actions">
