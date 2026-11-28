@@ -26,7 +26,7 @@ async function build() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Đồng hồ đo quota dùng chung theo thời gian thực (5 giờ & tuần) và tốc độ token/s của Antigravity kèm animation pixel Bé Turbo." />
+  <meta name="description" content="Đồng hồ đo quota theo từng tài khoản, tốc độ token/s realtime và thống kê token ngày, tháng, tổng kèm tỷ lệ Cache Hit của Antigravity." />
   <title>Quota & Speed Meter</title>
   <style>${css.trim()}</style>
 </head>
@@ -51,6 +51,38 @@ async function build() {
         <button class="ctrl-btn" id="refresh-btn" type="button" aria-label="Làm mới dữ liệu">Làm mới</button>
       </div>
     </header>
+
+    <section class="account-bar" aria-label="Quản lý tài khoản và phạm vi thống kê">
+      <div class="account-left">
+        <label class="account-select-wrap">
+          <span class="account-label">Tài khoản đang đo</span>
+          <select class="field-input account-select" id="account-select" aria-label="Chọn tài khoản Antigravity"></select>
+        </label>
+        <button class="ctrl-btn" id="add-account-btn" type="button">Đổi / Thêm acc</button>
+      </div>
+      <div class="scope-switch" role="tablist" aria-label="Phạm vi thống kê token">
+        <button class="switch-btn" role="tab" type="button" data-scope="account" aria-selected="true">Acc hiện tại</button>
+        <button class="switch-btn" role="tab" type="button" data-scope="all" aria-selected="false">Toàn máy</button>
+      </div>
+    </section>
+
+    <section class="new-account-panel" id="new-account-panel" hidden aria-label="Tạo hoặc chuyển sang tài khoản mới">
+      <form class="new-account-form" id="new-account-form">
+        <label class="field-group new-account-field">
+          <span>Tên tài khoản mới (ví dụ: Acc bạn, Gmail 2)</span>
+          <input class="field-input" id="new-account-name" type="text" maxlength="48" placeholder="Nhập tên tài khoản…" />
+        </label>
+        <div class="new-account-actions">
+          <button class="ctrl-btn is-primary" type="submit">Tạo &amp; chuyển ngay</button>
+          <button class="ctrl-btn" id="new-account-cancel" type="button">Hủy</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="sync-alert-banner" id="sync-alert-banner" hidden role="status">
+      <span id="sync-alert-text">Bạn vừa đổi sang tài khoản khác hoặc chưa kiểm tra lại quota. Hãy mở View Usage rồi bấm Đồng bộ để tránh lệch số.</span>
+      <button class="ctrl-btn" id="sync-alert-btn" type="button">Kiểm tra &amp; Đồng bộ</button>
+    </section>
 
     <section class="error-banner" id="error-banner" hidden role="alert">
       <span id="error-text">Không đọc được dữ liệu từ máy chủ MCP.</span>
@@ -109,10 +141,56 @@ async function build() {
       </div>
     </section>
 
-    <section class="quota-section" aria-label="Đồng hồ quota dùng chung">
+    <section class="usage-section" aria-label="Thống kê token ngày, tháng, tổng và Cache Hit">
       <div class="section-toolbar">
-        <h2 class="section-title" id="quota-section-title">Đồng hồ Quota dùng chung</h2>
-        <span class="section-hint" id="quota-mode-hint">Theo đúng 2 nhóm của View Usage, bấm Đồng bộ để khớp % và giờ Reset</span>
+        <h2 class="section-title" id="usage-section-title">Thống kê Token &amp; Cache Hit</h2>
+        <span class="section-hint" id="usage-scope-hint">Đo chính xác từ transcript của tài khoản đang chọn</span>
+      </div>
+      <div class="kpi-strip">
+        <article class="kpi-tile">
+          <div class="kpi-head">
+            <span class="kpi-label" id="kpi-today-label">Hôm nay</span>
+            <span class="kpi-badge" id="kpi-today-cache">Cache 0%</span>
+          </div>
+          <span class="kpi-value" id="kpi-today-total">0</span>
+          <span class="kpi-breakdown" id="kpi-today-breakdown">In 0 | Cache 0 | Out 0</span>
+        </article>
+        <article class="kpi-tile">
+          <div class="kpi-head">
+            <span class="kpi-label" id="kpi-month-label">Tháng này</span>
+            <span class="kpi-badge" id="kpi-month-cache">Cache 0%</span>
+          </div>
+          <span class="kpi-value" id="kpi-month-total">0</span>
+          <span class="kpi-breakdown" id="kpi-month-breakdown">In 0 | Cache 0 | Out 0</span>
+        </article>
+        <article class="kpi-tile">
+          <div class="kpi-head">
+            <span class="kpi-label">Tổng từ trước đến giờ</span>
+            <span class="kpi-badge" id="kpi-all-convs">0 hội thoại</span>
+          </div>
+          <span class="kpi-value" id="kpi-all-total">0</span>
+          <span class="kpi-breakdown" id="kpi-all-breakdown">In 0 | Cache 0 | Out 0</span>
+        </article>
+        <article class="kpi-tile">
+          <div class="kpi-head">
+            <span class="kpi-label">Tỉ lệ Cache Hit</span>
+            <span class="kpi-badge" id="kpi-cache-days">0 ngày</span>
+          </div>
+          <span class="kpi-value" id="kpi-cache-rate">0%</span>
+          <div class="composition-track" aria-hidden="true">
+            <span class="comp-seg comp-in" id="comp-bar-in"></span>
+            <span class="comp-seg comp-cache" id="comp-bar-cache"></span>
+            <span class="comp-seg comp-out" id="comp-bar-out"></span>
+          </div>
+          <span class="kpi-breakdown" id="kpi-cache-detail">Cache read trên tổng input</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="quota-section" aria-label="Đồng hồ quota dùng chung theo tài khoản">
+      <div class="section-toolbar">
+        <h2 class="section-title" id="quota-section-title">Đồng hồ Quota theo tài khoản</h2>
+        <span class="section-hint" id="quota-mode-hint">Tách riêng từng acc, bấm Đồng bộ để khớp % từ View Usage</span>
       </div>
       <div class="quota-grid" id="quota-grid">
         <div class="skeleton-row" aria-hidden="true"></div>
@@ -158,25 +236,31 @@ async function build() {
       </form>
     </section>
 
-    <section class="turns-section" aria-label="Lượt phản hồi gần nhất">
+    <section class="turns-section" aria-label="Bảng chi tiết theo ngày, tháng và nhịp tốc độ">
       <div class="section-toolbar">
-        <h2 class="section-title">Nhịp lượt gần nhất</h2>
+        <div class="history-tabs" role="tablist" aria-label="Chế độ xem chi tiết">
+          <button class="switch-btn" role="tab" type="button" data-history="daily" aria-selected="true">Theo ngày</button>
+          <button class="switch-btn" role="tab" type="button" data-history="monthly" aria-selected="false">Theo tháng</button>
+          <button class="switch-btn" role="tab" type="button" data-history="turns" aria-selected="false">Nhịp tok/s</button>
+        </div>
         <span class="section-hint" id="turns-scan-meta">Chưa quét</span>
       </div>
       <div class="table-wrap">
         <table class="turns-table">
-          <thead>
+          <thead id="history-thead">
             <tr>
-              <th scope="col">Giờ</th>
-              <th scope="col">Model</th>
+              <th scope="col">Ngày</th>
+              <th scope="col" class="num">Tổng</th>
+              <th scope="col" class="num">Input mới</th>
+              <th scope="col" class="num">Cache Read</th>
               <th scope="col" class="num">Output</th>
-              <th scope="col" class="num">Thời gian</th>
-              <th scope="col" class="num">Tốc độ</th>
+              <th scope="col" class="num">Cache Hit</th>
+              <th scope="col" class="num">Lượt</th>
             </tr>
           </thead>
-          <tbody id="turns-tbody">
+          <tbody id="history-tbody">
             <tr>
-              <td colspan="5" class="empty-cell">Đang chờ dữ liệu lượt phản hồi…</td>
+              <td colspan="7" class="empty-cell">Đang chờ dữ liệu thống kê…</td>
             </tr>
           </tbody>
         </table>

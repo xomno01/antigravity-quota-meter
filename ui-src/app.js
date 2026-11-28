@@ -12,6 +12,8 @@ const CLOCK_CIRCUMFERENCE = 2 * Math.PI * 22; // r = 22 -> ~138.23
 const state = {
   liveEnabled: true,
   isPolling: false,
+  scope: 'account', // 'account' | 'all'
+  historyTab: 'daily', // 'daily' | 'monthly' | 'turns'
   snapshot: null,
   hostConnected: false,
   countdownOffsetSec: 0,
@@ -22,6 +24,16 @@ const els = {
   subtitle: document.getElementById('status-subtitle'),
   liveToggleBtn: document.getElementById('live-toggle-btn'),
   refreshBtn: document.getElementById('refresh-btn'),
+  accountSelect: document.getElementById('account-select'),
+  addAccountBtn: document.getElementById('add-account-btn'),
+  newAccountPanel: document.getElementById('new-account-panel'),
+  newAccountForm: document.getElementById('new-account-form'),
+  newAccountName: document.getElementById('new-account-name'),
+  newAccountCancel: document.getElementById('new-account-cancel'),
+  scopeBtns: [...document.querySelectorAll('.switch-btn[data-scope]')],
+  syncAlertBanner: document.getElementById('sync-alert-banner'),
+  syncAlertText: document.getElementById('sync-alert-text'),
+  syncAlertBtn: document.getElementById('sync-alert-btn'),
   errorBanner: document.getElementById('error-banner'),
   errorText: document.getElementById('error-text'),
   retryBtn: document.getElementById('retry-btn'),
@@ -37,6 +49,24 @@ const els = {
   speedSparkline: document.getElementById('speed-sparkline'),
   pixelCanvas: document.getElementById('pixel-stage'),
   pixelSpeech: document.getElementById('pixel-speech-text'),
+  usageScopeHint: document.getElementById('usage-scope-hint'),
+  kpiTodayLabel: document.getElementById('kpi-today-label'),
+  kpiTodayCache: document.getElementById('kpi-today-cache'),
+  kpiTodayTotal: document.getElementById('kpi-today-total'),
+  kpiTodayBreakdown: document.getElementById('kpi-today-breakdown'),
+  kpiMonthLabel: document.getElementById('kpi-month-label'),
+  kpiMonthCache: document.getElementById('kpi-month-cache'),
+  kpiMonthTotal: document.getElementById('kpi-month-total'),
+  kpiMonthBreakdown: document.getElementById('kpi-month-breakdown'),
+  kpiAllConvs: document.getElementById('kpi-all-convs'),
+  kpiAllTotal: document.getElementById('kpi-all-total'),
+  kpiAllBreakdown: document.getElementById('kpi-all-breakdown'),
+  kpiCacheDays: document.getElementById('kpi-cache-days'),
+  kpiCacheRate: document.getElementById('kpi-cache-rate'),
+  compBarIn: document.getElementById('comp-bar-in'),
+  compBarCache: document.getElementById('comp-bar-cache'),
+  compBarOut: document.getElementById('comp-bar-out'),
+  kpiCacheDetail: document.getElementById('kpi-cache-detail'),
   quotaGrid: document.getElementById('quota-grid'),
   calibPanel: document.getElementById('calib-panel'),
   calibTitle: document.getElementById('calib-title'),
@@ -49,8 +79,10 @@ const els = {
   calibLimit5h: document.getElementById('calib-limit-5h'),
   calibLimit7d: document.getElementById('calib-limit-7d'),
   calibResetBtn: document.getElementById('calib-reset-btn'),
+  historyBtns: [...document.querySelectorAll('.switch-btn[data-history]')],
   turnsMeta: document.getElementById('turns-scan-meta'),
-  turnsTbody: document.getElementById('turns-tbody'),
+  historyThead: document.getElementById('history-thead'),
+  historyTbody: document.getElementById('history-tbody'),
 };
 
 function fmtCompact(n) {
@@ -159,6 +191,29 @@ function severityClass(remainingPct) {
   return '';
 }
 
+function renderAccountBar(snapshot) {
+  const acc = snapshot.account;
+  if (!acc) return;
+
+  const optsHtml = (acc.accounts || [])
+    .map((a) => {
+      const selected = a.id === acc.activeId ? ' selected' : '';
+      return `<option value="${a.id}"${selected}>${a.label}</option>`;
+    })
+    .join('');
+  if (els.accountSelect.innerHTML !== optsHtml) {
+    els.accountSelect.innerHTML = optsHtml;
+  }
+  els.accountSelect.value = acc.activeId;
+
+  if (acc.needsSync) {
+    els.syncAlertText.textContent = `Đang ở "${acc.activeLabel}": chưa kiểm tra lại quota cho acc này. Hãy mở View Usage rồi bấm Đồng bộ để khớp %.`;
+    els.syncAlertBanner.hidden = false;
+  } else {
+    els.syncAlertBanner.hidden = true;
+  }
+}
+
 function renderSpeedometer(snapshot) {
   const sp = snapshot.speed;
   const displayTokSec =
@@ -239,12 +294,46 @@ function renderSparkline(history) {
   `;
 }
 
+function renderUsageStrip(snapshot) {
+  const u = snapshot.usage;
+  if (!u) return;
+
+  const scopeName =
+    u.scope === 'all' ? 'Toàn máy (mọi lịch sử trên PC)' : `Acc "${snapshot.account?.activeLabel || 'Hiện tại'}"`;
+  els.usageScopeHint.textContent = `Phạm vi: ${scopeName} (${u.timeZone})`;
+
+  const td = u.today;
+  els.kpiTodayLabel.textContent = `Hôm nay (${td.date})`;
+  els.kpiTodayCache.textContent = `Cache ${td.cacheHitRate}%`;
+  els.kpiTodayTotal.textContent = fmtCompact(td.total);
+  els.kpiTodayBreakdown.textContent = `In ${fmtCompact(td.input)} | Cache ${fmtCompact(td.cacheRead)} | Out ${fmtCompact(td.output)}`;
+
+  const mo = u.thisMonth;
+  els.kpiMonthLabel.textContent = `Tháng ${mo.month}`;
+  els.kpiMonthCache.textContent = `Cache ${mo.cacheHitRate}%`;
+  els.kpiMonthTotal.textContent = fmtCompact(mo.total);
+  els.kpiMonthBreakdown.textContent = `In ${fmtCompact(mo.input)} | Cache ${fmtCompact(mo.cacheRead)} | Out ${fmtCompact(mo.output)}`;
+
+  const all = u.allTime;
+  els.kpiAllConvs.textContent = `${all.conversations} hội thoại`;
+  els.kpiAllTotal.textContent = fmtCompact(all.total);
+  els.kpiAllBreakdown.textContent = `In ${fmtCompact(all.input)} | Cache ${fmtCompact(all.cacheRead)} | Out ${fmtCompact(all.output)}`;
+
+  els.kpiCacheDays.textContent = `${all.activeDays} ngày`;
+  els.kpiCacheRate.textContent = `${all.cacheHitRate}%`;
+  const tot = Math.max(1, all.total);
+  els.compBarIn.style.transform = `scaleX(${(all.input / tot).toFixed(4)})`;
+  els.compBarCache.style.transform = `scaleX(${(all.cacheRead / tot).toFixed(4)})`;
+  els.compBarOut.style.transform = `scaleX(${(all.output / tot).toFixed(4)})`;
+  els.kpiCacheDetail.textContent = `Cache ${fmtCompact(all.cacheRead)} / Input ${fmtCompact(all.input + all.cacheRead)}`;
+}
+
 function renderClockSlot(title, w) {
   const pct = Number(w.remainingPct || 0);
   const sev = severityClass(pct);
   const offset = CLOCK_CIRCUMFERENCE * (1 - Math.min(100, Math.max(0, pct)) / 100);
   const resetSec = Math.max(0, (w.nextResetInSec || 0) - state.countdownOffsetSec);
-  const modeLabel = w.sourceMode === 'synced' ? 'Đã đồng bộ' : 'Mốc mặc định';
+  const modeLabel = w.sourceMode === 'synced' ? 'Đã đồng bộ' : 'Chưa đồng bộ';
 
   return `
     <div class="dual-clock-slot">
@@ -291,7 +380,7 @@ function renderQuotaGrid(snapshot) {
       const subText =
         subModels.length > 0
           ? subModels.map((m) => `${m.model} (${fmtCompact(m.total)})`).join(', ')
-          : 'Chưa phát sinh lượt trong chu kỳ hiện tại';
+          : 'Chưa phát sinh lượt trên acc này trong chu kỳ';
 
       return `
         <article class="quota-tile${activeCls}" data-bucket-id="${b.id}">
@@ -316,39 +405,89 @@ function renderQuotaGrid(snapshot) {
     .join('');
 }
 
-function renderTurnsTable(snapshot) {
-  const turns = snapshot.speed?.recentTurns || [];
+function renderHistoryTable(snapshot) {
   els.turnsMeta.textContent = `Cập nhật ${fmtLocalTime(snapshot.generatedAt)} (${snapshot.scanDurationMs}ms)`;
 
-  if (turns.length === 0) {
-    els.turnsTbody.innerHTML =
-      '<tr><td colspan="5" class="empty-cell">Chưa có lượt phản hồi nào trong 7 ngày qua.</td></tr>';
+  if (state.historyTab === 'turns') {
+    els.historyThead.innerHTML = `
+      <tr>
+        <th scope="col">Giờ</th>
+        <th scope="col">Model</th>
+        <th scope="col" class="num">Output</th>
+        <th scope="col" class="num">Thời gian</th>
+        <th scope="col" class="num">Tốc độ</th>
+      </tr>
+    `;
+    const turns = snapshot.speed?.recentTurns || [];
+    if (turns.length === 0) {
+      els.historyTbody.innerHTML =
+        '<tr><td colspan="5" class="empty-cell">Chưa có lượt phản hồi nào gần đây.</td></tr>';
+      return;
+    }
+    const maxSpeed = Math.max(40, ...turns.map((t) => Number(t.tokPerSec) || 0));
+    els.historyTbody.innerHTML = turns
+      .slice(0, 8)
+      .map((t) => {
+        const speedText = t.tokPerSec !== null ? `${t.tokPerSec.toFixed(1)}` : '-';
+        const durText = t.durationSec !== null ? `${t.durationSec.toFixed(1)}s` : '-';
+        const ratio =
+          t.tokPerSec !== null ? Math.min(1, Math.max(0.05, t.tokPerSec / maxSpeed)) : 0;
+        return `
+          <tr>
+            <td class="num">${fmtLocalTime(t.createdAt)}</td>
+            <td>${t.model}</td>
+            <td class="num">${fmtCompact(t.output)}</td>
+            <td class="num">${durText}</td>
+            <td class="num">
+              <div class="speed-cell-wrap">
+                <span>${speedText}</span>
+                <span class="mini-bar-track" aria-hidden="true">
+                  <span class="mini-bar-fill" style="display:block;transform:scaleX(${ratio.toFixed(3)})"></span>
+                </span>
+              </div>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
     return;
   }
 
-  const maxSpeed = Math.max(40, ...turns.map((t) => Number(t.tokPerSec) || 0));
-  els.turnsTbody.innerHTML = turns
-    .slice(0, 8)
-    .map((t) => {
-      const speedText = t.tokPerSec !== null ? `${t.tokPerSec.toFixed(1)}` : '—';
-      const durText = t.durationSec !== null ? `${t.durationSec.toFixed(1)}s` : '—';
-      const ratio =
-        t.tokPerSec !== null ? Math.min(1, Math.max(0.05, t.tokPerSec / maxSpeed)) : 0;
+  const isMonthly = state.historyTab === 'monthly';
+  els.historyThead.innerHTML = `
+    <tr>
+      <th scope="col">${isMonthly ? 'Tháng' : 'Ngày'}</th>
+      <th scope="col" class="num">Tổng</th>
+      <th scope="col" class="num">Input mới</th>
+      <th scope="col" class="num">Cache Read</th>
+      <th scope="col" class="num">Output</th>
+      <th scope="col" class="num">Cache Hit</th>
+      <th scope="col" class="num">Lượt</th>
+    </tr>
+  `;
 
+  const rows = isMonthly
+    ? snapshot.usage?.monthly || []
+    : (snapshot.usage?.daily || []).slice(0, 14);
+
+  if (rows.length === 0) {
+    els.historyTbody.innerHTML =
+      '<tr><td colspan="7" class="empty-cell">Chưa có dữ liệu trong phạm vi đang chọn.</td></tr>';
+    return;
+  }
+
+  els.historyTbody.innerHTML = rows
+    .map((r) => {
+      const label = isMonthly ? r.month : r.date;
       return `
         <tr>
-          <td class="num">${fmtLocalTime(t.createdAt)}</td>
-          <td>${t.model}</td>
-          <td class="num">${fmtCompact(t.output)}</td>
-          <td class="num">${durText}</td>
-          <td class="num">
-            <div class="speed-cell-wrap">
-              <span>${speedText}</span>
-              <span class="mini-bar-track" aria-hidden="true">
-                <span class="mini-bar-fill" style="display:block;transform:scaleX(${ratio.toFixed(3)})"></span>
-              </span>
-            </div>
-          </td>
+          <td class="num">${label}</td>
+          <td class="num">${fmtCompact(r.total)}</td>
+          <td class="num">${fmtCompact(r.input)}</td>
+          <td class="num">${fmtCompact(r.cacheRead)}</td>
+          <td class="num">${fmtCompact(r.output)}</td>
+          <td class="num">${r.cacheHitRate}%</td>
+          <td class="num">${r.turns}</td>
         </tr>
       `;
     })
@@ -368,13 +507,16 @@ function renderSnapshot(snapshot) {
     ])
   );
 
+  const accLabel = snapshot.account?.activeLabel || 'Acc chính';
   els.subtitle.textContent = `${
     state.liveEnabled ? 'Live 1.5s' : 'Đang tạm dừng'
-  }, ${snapshot.buckets.length} nhóm quota dùng chung`;
+  }, đang đo "${accLabel}"`;
 
+  renderAccountBar(snapshot);
   renderSpeedometer(snapshot);
+  renderUsageStrip(snapshot);
   renderQuotaGrid(snapshot);
-  renderTurnsTable(snapshot);
+  renderHistoryTable(snapshot);
 
   stage.setTelemetry({
     activityState: snapshot.activityState,
@@ -400,7 +542,8 @@ function openCalibration(bucketId) {
   if (!bucket) return;
 
   state.editingBucketId = bucketId;
-  els.calibTitle.textContent = `Đồng bộ ${bucket.label}`;
+  const accLabel = state.snapshot.account?.activeLabel || 'Acc hiện tại';
+  els.calibTitle.textContent = `Đồng bộ ${bucket.label} (${accLabel})`;
   els.calibBucketId.value = bucket.id;
   els.calibWindow.value = '5h';
   populateCalibrationFields(bucketId, '5h');
@@ -419,7 +562,7 @@ const stage = new PixelTelemetryStage(els.pixelCanvas, els.pixelSpeech, {
   },
 });
 
-const app = new App({ name: 'Quota & Speed Meter', version: '1.1.0' }, {});
+const app = new App({ name: 'Quota & Speed Meter', version: '2.0.0' }, {});
 
 function applyThemeFromContext(ctx) {
   if (!ctx) return;
@@ -433,9 +576,18 @@ function applyThemeFromContext(ctx) {
   }
 }
 
+app.ontoolinput = ({ arguments: args }) => {
+  if (args?.scope === 'all' || args?.scope === 'account') {
+    setScope(args.scope, false);
+  }
+};
+
 app.ontoolresult = (result) => {
   const sc = result?.structuredContent;
   if (!sc) return;
+  if (sc.initialParams?.scope === 'all' || sc.initialParams?.scope === 'account') {
+    setScope(sc.initialParams.scope, false);
+  }
   if (sc.snapshot) {
     showError('');
     renderSnapshot(sc.snapshot);
@@ -458,7 +610,7 @@ async function pollNow() {
   try {
     const res = await app.callServerTool({
       name: 'app_poll_telemetry',
-      arguments: {},
+      arguments: { scope: state.scope },
     });
     if (res?.structuredContent) {
       showError('');
@@ -471,15 +623,36 @@ async function pollNow() {
   }
 }
 
+function setScope(nextScope, triggerPoll = true) {
+  state.scope = nextScope === 'all' ? 'all' : 'account';
+  for (const btn of els.scopeBtns) {
+    btn.setAttribute('aria-selected', String(btn.dataset.scope === state.scope));
+  }
+  if (triggerPoll) {
+    void pollNow();
+  }
+}
+
+function setHistoryTab(tab) {
+  state.historyTab = tab === 'monthly' || tab === 'turns' ? tab : 'daily';
+  for (const btn of els.historyBtns) {
+    btn.setAttribute('aria-selected', String(btn.dataset.history === state.historyTab));
+  }
+  if (state.snapshot) {
+    renderHistoryTable(state.snapshot);
+  }
+}
+
 els.liveToggleBtn.addEventListener('click', () => {
   state.liveEnabled = !state.liveEnabled;
   els.liveToggleBtn.setAttribute('aria-pressed', String(state.liveEnabled));
   els.liveToggleBtn.classList.toggle('is-live', state.liveEnabled);
   els.liveToggleBtn.textContent = state.liveEnabled ? 'Live 1.5s' : 'Tạm dừng';
   if (state.snapshot) {
+    const accLabel = state.snapshot.account?.activeLabel || 'Acc chính';
     els.subtitle.textContent = `${
       state.liveEnabled ? 'Live 1.5s' : 'Đang tạm dừng'
-    }, ${state.snapshot.buckets.length} nhóm quota dùng chung`;
+    }, đang đo "${accLabel}"`;
   }
 });
 
@@ -489,6 +662,73 @@ els.refreshBtn.addEventListener('click', () => {
 
 els.retryBtn.addEventListener('click', () => {
   void pollNow();
+});
+
+for (const btn of els.scopeBtns) {
+  btn.addEventListener('click', () => {
+    setScope(btn.dataset.scope, true);
+  });
+}
+
+for (const btn of els.historyBtns) {
+  btn.addEventListener('click', () => {
+    setHistoryTab(btn.dataset.history);
+  });
+}
+
+els.accountSelect.addEventListener('change', async () => {
+  if (!state.hostConnected) return;
+  const accountId = els.accountSelect.value;
+  try {
+    const res = await app.callServerTool({
+      name: 'app_manage_account',
+      arguments: { action: 'switch', accountId, scope: state.scope },
+    });
+    if (res?.structuredContent) {
+      showError('');
+      closeCalibration();
+      renderSnapshot(res.structuredContent);
+    }
+  } catch (err) {
+    showError(`Không đổi được tài khoản: ${err?.message || 'Lỗi MCP'}`);
+  }
+});
+
+els.addAccountBtn.addEventListener('click', () => {
+  els.newAccountPanel.hidden = !els.newAccountPanel.hidden;
+  if (!els.newAccountPanel.hidden) {
+    els.newAccountName.value = '';
+    els.newAccountName.focus();
+  }
+});
+
+els.newAccountCancel.addEventListener('click', () => {
+  els.newAccountPanel.hidden = true;
+});
+
+els.newAccountForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.hostConnected) return;
+  const label = els.newAccountName.value.trim();
+  if (!label) return;
+  try {
+    const res = await app.callServerTool({
+      name: 'app_manage_account',
+      arguments: { action: 'create', label, scope: state.scope },
+    });
+    if (res?.structuredContent) {
+      showError('');
+      els.newAccountPanel.hidden = true;
+      closeCalibration();
+      renderSnapshot(res.structuredContent);
+    }
+  } catch (err) {
+    showError(`Không tạo được tài khoản: ${err?.message || 'Lỗi MCP'}`);
+  }
+});
+
+els.syncAlertBtn.addEventListener('click', () => {
+  openCalibration('gemini-models');
 });
 
 els.quotaGrid.addEventListener('click', (e) => {
@@ -513,7 +753,7 @@ els.calibForm.addEventListener('submit', async (e) => {
   const bucketId = els.calibBucketId.value;
   if (!bucketId) return;
 
-  const payload = { bucketId };
+  const payload = { bucketId, scope: state.scope };
   const pctVal = Number(els.calibPct.value);
   const resetSec = parseDurationInput(els.calibReset.value);
   const lim5 = Number(els.calibLimit5h.value);
@@ -551,7 +791,7 @@ els.calibResetBtn.addEventListener('click', async () => {
   try {
     const res = await app.callServerTool({
       name: 'app_reset_quota_config',
-      arguments: { bucketId },
+      arguments: { bucketId, scope: state.scope },
     });
     if (res?.structuredContent) {
       showError('');
@@ -597,10 +837,11 @@ async function init() {
   } catch {
     state.hostConnected = false;
     els.subtitle.textContent = 'Chế độ xem độc lập, mở trong Antigravity Side Pane để đo live';
+    els.accountSelect.innerHTML = '<option value="acc-default">Acc chính</option>';
     els.quotaGrid.innerHTML =
       '<div class="quota-tile"><span class="section-hint">Đang chờ kết nối máy chủ MCP Quota Meter từ Antigravity.</span></div>';
-    els.turnsTbody.innerHTML =
-      '<tr><td colspan="5" class="empty-cell">Chưa có dữ liệu khi chạy ngoài Antigravity.</td></tr>';
+    els.historyTbody.innerHTML =
+      '<tr><td colspan="7" class="empty-cell">Chưa có dữ liệu khi chạy ngoài Antigravity.</td></tr>';
   }
 }
 

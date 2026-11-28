@@ -1,23 +1,25 @@
 # Antigravity Quota & Speed Meter
 
-Native **Antigravity MCP App** plugin (`quota-meter`) that mounts into Antigravity's **Side Pane** (`aux_pane`) and **Sidebar** (`global`) to monitor real-time **`tok/s` generation speed** and **per-model-group rolling quota clocks (5-hour & 7-day windows)**, accompanied by an interactive pixel-art telemetry cockpit (**"Bé Turbo"**).
-
-> Plugin MCP App cho **Antigravity App**: gắn ngay vào **Side Pane** và **Sidebar Plugins** để đo tốc độ `tok/s` theo thời gian thực và đồng hồ quota 5 giờ / 7 ngày cho từng nhóm model, kèm animation pixel "Bé Turbo" dễ thương.
+Native **Antigravity MCP App** plugin (`quota-meter`) that mounts into Antigravity's **Side Pane** (`aux_pane`) and **Sidebar** (`global`) to provide:
+1. **Per-Account Isolated Quota Clocks (5h & Weekly)** — separate sync anchors, custom limits, and timestamped account switch history so switching Antigravity accounts never mixes quota or token stats.
+2. **All-Time, Monthly, and Daily Token & Cache Hit Analytics** — exact `total`, `input`, `cacheRead`, `output`, and `Cache Hit %` across every conversation (with **`Acc hiện tại`** vs **`Toàn máy`** toggle).
+3. **Live `tok/s` Speedometer & "Bé Turbo" Pixel Cockpit** — accurate multi-tool generation throughput, 24-sample sparkline, and reactive dark/light pixel-art companion.
 
 ---
 
 ## Features / Tính năng chính
 
-- **Live `tok/s` Analog Speedometer & Sparkline**:
-  - Measures true generation throughput directly from `~/.gemini/antigravity/brain/*/transcript.jsonl` (`output_tokens` across the full turn duration, accurately spanning parallel multi-tool `GENERIC` events).
-  - Displays current `tok/s`, 12-turn average, 5-hour peak, 5-minute output rate, a 24-sample sparkline, and the latest 8 turns table.
+- **Per-Account Isolation (`Tài khoản đang đo`)**:
+  - Switch or create account profiles (`Đổi / Thêm acc`) directly inside the HUD.
+  - Each switch records a timestamp boundary (`switchLog`) in `${PLUGIN_DATA}/quota-config.json`. Quota clocks and `Acc hiện tại` stats count only turns recorded while that account is active, and each account keeps its own `5h` and `Weekly` sync anchors.
+  - Whenever you switch to an account without a valid recent sync, an alert banner reminds you to verify `View Usage` and click **Đồng bộ**.
+- **Full Token & Cache Hit Statistics (Daily, Monthly, All-Time)**:
+  - **Hôm nay**, **Tháng này**, **Tổng từ trước đến giờ**, and **Tỉ lệ Cache Hit %** (`cacheRead / (input + cacheRead)`), plus tabbed **Theo ngày**, **Theo tháng**, and **Nhịp tok/s** tables.
 - **Shared-Pool Quota Clocks (5h & Weekly)**:
-  - Matches Antigravity's actual 2 shared quota pools: **Gemini Models** (Neon, Hydrogen, Carbon, Argon, Flash) and **Claude and GPT models** (Claude Opus/Sonnet, GPT-OSS), showing **both `5h limit` and `Weekly limit`** simultaneously with sub-model usage breakdown.
-  - Live `HH:MM:SS` countdown timers showing when each window resets.
-  - **Quick Sync Calibration (`Đồng bộ`)**: Click **Đồng bộ** on any pool to enter your account's exact `%` remaining and reset countdown (e.g., `3h 47m` or `6d 15h`) from Antigravity's `View Usage` — persisted cleanly in `${PLUGIN_DATA}/quota-config.json` and decremented in real time as new tokens arrive.
-- **Reactive Pixel-Art Cockpit ("Bé Turbo")**:
-  - Procedural HTML5 Canvas pixel art (zero external images), automatically synced to Antigravity's Dark and Light themes (`prefers-reduced-motion` supported).
-  - Reacts live to `idle`, `working`, `burst`, and `< 20%` low-quota states. Click the stage to pet Bé Turbo for pixel hearts, gold orbs, and an immediate telemetry refresh.
+  - Matches Antigravity's 2 shared pools: **Gemini Models** and **Claude and GPT models**, showing both `5h limit` and `Weekly limit` simultaneously with live `HH:MM:SS` reset countdowns.
+- **Live `tok/s` Analog Speedometer & Reactive Pixel Art ("Bé Turbo")**:
+  - Scans full multi-tool `GENERIC` spans so parallel tool calls never inflate `tok/s`.
+  - Click Bé Turbo's cockpit to spawn pixel hearts/coins and trigger an instant refresh.
 
 ---
 
@@ -38,7 +40,7 @@ git clone https://github.com/xomno01/antigravity-quota-meter.git ~/.gemini/confi
 cd ~/.gemini/config/plugins/quota-meter
 npm install
 ```
-Antigravity discovers plugins in `~/.gemini/config/plugins/` automatically:
+Open in Antigravity:
 - **Side Pane**: Click **`+`** in the Side Pane tab bar → **Quota Meter** (or `⋯` → **Plugins** → **Quota Meter**).
 - **Full Page**: Open **Plugins** in the left Sidebar → **Quota Meter**.
 
@@ -49,33 +51,9 @@ Antigravity discovers plugins in `~/.gemini/config/plugins/` automatically:
 Requires **Node.js 20+**.
 
 ```bash
-# Install dependencies
 npm install
-
-# Bundle ui-src/ into self-contained dist/hud.html
 npm run build:ui
-
-# Start MCP stdio server directly (for testing)
 npm start
-```
-
-### Project Structure
-```text
-quota-meter/
-├── plugin.json          # Antigravity plugin manifest
-├── mcp_config.json      # MCP stdio server definition (meter)
-├── package.json
-├── assets/logo.svg      # Pixel gauge icon
-├── server/
-│   ├── index.mjs        # MCP server, ui:// resource & 5 tools
-│   └── telemetry.mjs    # Incremental transcript scanner, tok/s & rolling window engine
-├── ui-src/
-│   ├── app.js           # @modelcontextprotocol/ext-apps client + 1.5s live polling
-│   ├── pixel-stage.js   # Procedural pixel-art cockpit ("Bé Turbo")
-│   ├── styles.css       # Theme-token CSS (dark & light)
-│   └── build.mjs        # esbuild single-file bundler
-└── dist/
-    └── hud.html         # Prebuilt self-contained MCP App HTML
 ```
 
 ---

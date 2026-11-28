@@ -1,8 +1,8 @@
 {
   "name": "quota-meter",
   "displayName": "Quota & Speed Meter",
-  "version": "1.1.0",
-  "description": "Đồng hồ đo quota dùng chung theo thời gian thực (5 giờ & Tuần cho Gemini Models và Claude/GPT) cùng tốc độ token/s live và animation pixel Bé Turbo.",
+  "version": "2.0.0",
+  "description": "Đồng hồ đo quota tách riêng theo từng tài khoản (5 giờ & Tuần), tốc độ token/s live, thống kê token ngày/tháng/tổng kèm Cache Hit % và animation pixel Bé Turbo.",
   "logo": "assets/logo.svg",
   "author": {
     "name": "xomno01",

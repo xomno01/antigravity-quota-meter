@@ -4,10 +4,27 @@ import os from 'node:os';
 
 const WIN_5H_MS = 5 * 3600 * 1000;
 const WIN_7D_MS = 7 * 86400 * 1000;
-const STALE_FILE_CUTOFF_MS = 8 * 86400 * 1000;
+const RECENT_TURN_HORIZON_MS = 8 * 86400 * 1000;
 const ACTIVE_WINDOW_MS = 25 * 1000;
 const BURST_WINDOW_MS = 12 * 1000;
 const SPEED_CURRENT_MAX_AGE_MS = 10 * 60 * 1000;
+const DEFAULT_ACCOUNT_ID = 'acc-default';
+
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Ho_Chi_Minh';
+
+const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: LOCAL_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function toLocalDate(msOrIso) {
+  if (!msOrIso) return 'unknown';
+  const d = typeof msOrIso === 'number' ? new Date(msOrIso) : new Date(msOrIso);
+  if (Number.isNaN(d.getTime())) return 'unknown';
+  return dateFormatter.format(d); // YYYY-MM-DD
+}
 
 export const MODEL_BUCKETS = [
   {
@@ -86,10 +103,7 @@ export function parseResetDuration(input) {
 
   const hhmm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(str);
   if (hhmm) {
-    const h = Number(hhmm[1]);
-    const min = Number(hhmm[2]);
-    const sec = Number(hhmm[3] || 0);
-    return h * 3600 + min * 60 + sec;
+    return Number(hhmm[1]) * 3600 + Number(hhmm[2]) * 60 + Number(hhmm[3] || 0);
   }
   return null;
 }
@@ -108,6 +122,27 @@ function calcCacheHitRate(input, cacheRead) {
   return round1((cacheRead / totalIn) * 100);
 }
 
+function sanitizeLabel(label, fallback = 'Tài khoản') {
+  const clean = String(label || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48);
+  return clean || fallback;
+}
+
+function makeAccountId(label) {
+  const slug = String(label || 'acc')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 20) || 'acc';
+  const suffix = (Date.now() % 100000).toString(36);
+  return `acc-${slug}-${suffix}`;
+}
+
 function sanitizeSyncAnchor(anchor) {
   if (!anchor || typeof anchor !== 'object') return null;
   const pct = Number(anchor.syncedRemainingPct);
@@ -123,6 +158,42 @@ function sanitizeSyncAnchor(anchor) {
   return out;
 }
 
+function sanitizeBucketsMap(rawBuckets) {
+  const out = {};
+  if (!rawBuckets || typeof rawBuckets !== 'object') return out;
+  for (const [id, cfg] of Object.entries(rawBuckets)) {
+    if (!BUCKET_MAP.has(id) || !cfg || typeof cfg !== 'object') continue;
+    const entry = {};
+    if (Number.isFinite(cfg.limit5h) && cfg.limit5h > 0) {
+      entry.limit5h = Math.round(cfg.limit5h);
+    }
+    if (Number.isFinite(cfg.limit7d) && cfg.limit7d > 0) {
+      entry.limit7d = Math.round(cfg.limit7d);
+    }
+    const s5 = sanitizeSyncAnchor(cfg.sync5h);
+    if (s5) entry.sync5h = s5;
+    const s7 = sanitizeSyncAnchor(cfg.sync7d);
+    if (s7) entry.sync7d = s7;
+    out[id] = entry;
+  }
+  return out;
+}
+
+export function resolveAccountForTimestamp(atMs, switchLog) {
+  if (!Array.isArray(switchLog) || switchLog.length === 0) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  let matched = switchLog[0].accountId || DEFAULT_ACCOUNT_ID;
+  for (let i = 1; i < switchLog.length; i++) {
+    if (switchLog[i].fromMs <= atMs) {
+      matched = switchLog[i].accountId;
+    } else {
+      break;
+    }
+  }
+  return matched;
+}
+
 export class QuotaTelemetryEngine {
   constructor(options = {}) {
     this.appDataDir =
@@ -134,38 +205,113 @@ export class QuotaTelemetryEngine {
       options.dataDir ||
       path.join(this.appDataDir, 'plugin_data', 'quota-meter');
     this.configFile = path.join(this.dataDir, 'quota-config.json');
+    this.cacheFile = path.join(this.dataDir, 'transcript-cache.v2.json');
 
     /** @type {Map<string, any>} */
     this.fileCache = new Map();
+    this._loadDiskCache();
+  }
+
+  _loadDiskCache() {
+    try {
+      if (!fs.existsSync(this.cacheFile)) return;
+      const raw = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
+      if (raw && raw.version === 2 && raw.entries && typeof raw.entries === 'object') {
+        for (const [id, entry] of Object.entries(raw.entries)) {
+          this.fileCache.set(id, entry);
+        }
+      }
+    } catch {
+      // Ignore corrupt cache and rebuild cleanly
+    }
+  }
+
+  _saveDiskCache() {
+    try {
+      fs.mkdirSync(this.dataDir, { recursive: true });
+      const entries = Object.fromEntries(this.fileCache.entries());
+      const tmp = `${this.cacheFile}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: 2, tz: LOCAL_TZ, entries }), 'utf8');
+      fs.renameSync(tmp, this.cacheFile);
+    } catch {
+      // Non-fatal
+    }
   }
 
   loadConfig() {
-    const base = { version: 2, buckets: {} };
+    const defaultConfig = {
+      version: 3,
+      activeAccountId: DEFAULT_ACCOUNT_ID,
+      accounts: {
+        [DEFAULT_ACCOUNT_ID]: {
+          id: DEFAULT_ACCOUNT_ID,
+          label: 'Acc chính',
+          createdAtMs: 0,
+          buckets: {},
+        },
+      },
+      switchLog: [{ accountId: DEFAULT_ACCOUNT_ID, fromMs: 0 }],
+    };
+
     try {
-      if (!fs.existsSync(this.configFile)) return base;
+      if (!fs.existsSync(this.configFile)) return defaultConfig;
       const parsed = JSON.parse(fs.readFileSync(this.configFile, 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || typeof parsed.buckets !== 'object') {
-        return base;
+      if (!parsed || typeof parsed !== 'object') return defaultConfig;
+
+      // Migrate v1/v2 config seamlessly into accounts[DEFAULT_ACCOUNT_ID]
+      if (!parsed.accounts || typeof parsed.accounts !== 'object') {
+        const migratedBuckets = sanitizeBucketsMap(parsed.buckets);
+        defaultConfig.accounts[DEFAULT_ACCOUNT_ID].buckets = migratedBuckets;
+        return defaultConfig;
       }
-      const sanitized = { version: 2, buckets: {} };
-      for (const [id, cfg] of Object.entries(parsed.buckets)) {
-        if (!BUCKET_MAP.has(id) || !cfg || typeof cfg !== 'object') continue;
-        const entry = {};
-        if (Number.isFinite(cfg.limit5h) && cfg.limit5h > 0) {
-          entry.limit5h = Math.round(cfg.limit5h);
-        }
-        if (Number.isFinite(cfg.limit7d) && cfg.limit7d > 0) {
-          entry.limit7d = Math.round(cfg.limit7d);
-        }
-        const s5 = sanitizeSyncAnchor(cfg.sync5h);
-        if (s5) entry.sync5h = s5;
-        const s7 = sanitizeSyncAnchor(cfg.sync7d);
-        if (s7) entry.sync7d = s7;
-        sanitized.buckets[id] = entry;
+
+      const accounts = {};
+      for (const [id, rawAcc] of Object.entries(parsed.accounts)) {
+        if (!rawAcc || typeof rawAcc !== 'object' || !/^[a-z0-9_-]{3,48}$/.test(id)) continue;
+        accounts[id] = {
+          id,
+          label: sanitizeLabel(rawAcc.label, id === DEFAULT_ACCOUNT_ID ? 'Acc chính' : id),
+          createdAtMs: Number.isFinite(rawAcc.createdAtMs) ? rawAcc.createdAtMs : 0,
+          buckets: sanitizeBucketsMap(rawAcc.buckets),
+        };
       }
-      return sanitized;
+
+      if (!accounts[DEFAULT_ACCOUNT_ID]) {
+        accounts[DEFAULT_ACCOUNT_ID] = defaultConfig.accounts[DEFAULT_ACCOUNT_ID];
+      }
+
+      const activeAccountId =
+        typeof parsed.activeAccountId === 'string' && accounts[parsed.activeAccountId]
+          ? parsed.activeAccountId
+          : DEFAULT_ACCOUNT_ID;
+
+      const switchLog = [];
+      if (Array.isArray(parsed.switchLog)) {
+        for (const seg of parsed.switchLog) {
+          if (
+            seg &&
+            typeof seg.accountId === 'string' &&
+            accounts[seg.accountId] &&
+            Number.isFinite(seg.fromMs) &&
+            seg.fromMs >= 0
+          ) {
+            switchLog.push({ accountId: seg.accountId, fromMs: seg.fromMs });
+          }
+        }
+      }
+      switchLog.sort((a, b) => a.fromMs - b.fromMs);
+      if (switchLog.length === 0 || switchLog[0].fromMs > 0) {
+        switchLog.unshift({ accountId: DEFAULT_ACCOUNT_ID, fromMs: 0 });
+      }
+
+      return {
+        version: 3,
+        activeAccountId,
+        accounts,
+        switchLog,
+      };
     } catch {
-      return base;
+      return defaultConfig;
     }
   }
 
@@ -174,6 +320,69 @@ export class QuotaTelemetryEngine {
     const tmp = `${this.configFile}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf8');
     fs.renameSync(tmp, this.configFile);
+  }
+
+  manageAccount({ action, accountId, label } = {}) {
+    const config = this.loadConfig();
+    const now = Date.now();
+
+    if (action === 'create') {
+      const cleanLabel = sanitizeLabel(label, `Acc ${Object.keys(config.accounts).length + 1}`);
+      let newId = makeAccountId(cleanLabel);
+      while (config.accounts[newId]) {
+        newId = `${newId}x`;
+      }
+      config.accounts[newId] = {
+        id: newId,
+        label: cleanLabel,
+        createdAtMs: now,
+        buckets: {},
+      };
+      config.activeAccountId = newId;
+      config.switchLog.push({ accountId: newId, fromMs: now });
+      this._writeConfig(config);
+      return config;
+    }
+
+    if (action === 'switch') {
+      if (!accountId || !config.accounts[accountId]) {
+        throw new Error(`Unknown accountId: ${accountId}`);
+      }
+      if (config.activeAccountId !== accountId) {
+        config.activeAccountId = accountId;
+        config.switchLog.push({ accountId, fromMs: now });
+        this._writeConfig(config);
+      }
+      return config;
+    }
+
+    if (action === 'rename') {
+      const targetId = accountId || config.activeAccountId;
+      if (!config.accounts[targetId]) {
+        throw new Error(`Unknown accountId: ${targetId}`);
+      }
+      config.accounts[targetId].label = sanitizeLabel(label, config.accounts[targetId].label);
+      this._writeConfig(config);
+      return config;
+    }
+
+    if (action === 'delete') {
+      if (!accountId || !config.accounts[accountId]) {
+        throw new Error(`Unknown accountId: ${accountId}`);
+      }
+      if (accountId === DEFAULT_ACCOUNT_ID || accountId === config.activeAccountId) {
+        throw new Error('Cannot delete default or active account');
+      }
+      delete config.accounts[accountId];
+      config.switchLog = config.switchLog.filter((s) => s.accountId !== accountId);
+      if (config.switchLog.length === 0) {
+        config.switchLog.push({ accountId: DEFAULT_ACCOUNT_ID, fromMs: 0 });
+      }
+      this._writeConfig(config);
+      return config;
+    }
+
+    throw new Error(`Unsupported account action: ${action}`);
   }
 
   saveBucketConfig({
@@ -188,7 +397,8 @@ export class QuotaTelemetryEngine {
       throw new Error(`Invalid bucketId: ${bucketId}`);
     }
     const config = this.loadConfig();
-    const cur = config.buckets[bucketId] ? { ...config.buckets[bucketId] } : {};
+    const acc = config.accounts[config.activeAccountId];
+    const cur = acc.buckets[bucketId] ? { ...acc.buckets[bucketId] } : {};
 
     if (limit5h !== undefined && limit5h !== null) {
       const n = Number(limit5h);
@@ -228,29 +438,39 @@ export class QuotaTelemetryEngine {
       else cur.sync7d = anchor;
     }
 
-    config.buckets[bucketId] = cur;
+    acc.buckets[bucketId] = cur;
     this._writeConfig(config);
     return config;
   }
 
   resetConfig(bucketId) {
     const config = this.loadConfig();
+    const acc = config.accounts[config.activeAccountId];
     if (bucketId) {
       if (!BUCKET_MAP.has(bucketId)) {
         throw new Error(`Invalid bucketId: ${bucketId}`);
       }
-      delete config.buckets[bucketId];
+      delete acc.buckets[bucketId];
     } else {
-      config.buckets = {};
+      acc.buckets = {};
     }
     this._writeConfig(config);
     return config;
   }
 
-  _parseTranscript(convId, filePath, stat) {
+  _parseTranscript(convId, filePath, stat, retainTurnsCutoffMs) {
     const raw = fs.readFileSync(filePath, 'utf8');
     const lines = raw.split('\n');
     const events = [];
+
+    let input = 0;
+    let cacheRead = 0;
+    let output = 0;
+    let turnsCount = 0;
+    let firstAtMs = 0;
+    let lastAtMs = 0;
+    /** @type {Record<string, { input: number, cacheRead: number, output: number, total: number, turns: number }>} */
+    const byDate = {};
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -261,27 +481,52 @@ export class QuotaTelemetryEngine {
       } catch {
         continue;
       }
-      const atMs = typeof obj.created_at === 'string' ? Date.parse(obj.created_at) : NaN;
-      if (!Number.isFinite(atMs)) continue;
 
       const inTok = Number(obj.input_tokens) || 0;
       const cacheTok = Number(obj.cache_read_tokens) || 0;
       const outTok = Number(obj.output_tokens) || 0;
       const hasTokens = inTok > 0 || cacheTok > 0 || outTok > 0;
+      const atMs = typeof obj.created_at === 'string' ? Date.parse(obj.created_at) : NaN;
 
-      events.push({
-        stepIndex: obj.step_index ?? events.length,
-        type: obj.type || '',
-        atMs,
-        createdAt: obj.created_at,
-        model: obj.model || '',
-        toolCallCount: Array.isArray(obj.tool_calls) ? obj.tool_calls.length : 0,
-        inTok,
-        cacheTok,
-        outTok,
-        totalTok: inTok + cacheTok + outTok,
-        hasTokens,
-      });
+      if (Number.isFinite(atMs)) {
+        events.push({
+          stepIndex: obj.step_index ?? events.length,
+          type: obj.type || '',
+          atMs,
+          createdAt: obj.created_at,
+          model: obj.model || '',
+          toolCallCount: Array.isArray(obj.tool_calls) ? obj.tool_calls.length : 0,
+          inTok,
+          cacheTok,
+          outTok,
+          totalTok: inTok + cacheTok + outTok,
+          hasTokens,
+        });
+      }
+
+      // Exact parity with token-usage scanner: count every entry with tokens > 0
+      if (!hasTokens) continue;
+      const totalTok = inTok + cacheTok + outTok;
+      const dateKey = toLocalDate(obj.created_at);
+
+      input += inTok;
+      cacheRead += cacheTok;
+      output += outTok;
+      turnsCount += 1;
+
+      if (Number.isFinite(atMs)) {
+        if (!firstAtMs || atMs < firstAtMs) firstAtMs = atMs;
+        if (!lastAtMs || atMs > lastAtMs) lastAtMs = atMs;
+      }
+
+      if (!byDate[dateKey]) {
+        byDate[dateKey] = { input: 0, cacheRead: 0, output: 0, total: 0, turns: 0 };
+      }
+      byDate[dateKey].input += inTok;
+      byDate[dateKey].cacheRead += cacheTok;
+      byDate[dateKey].output += outTok;
+      byDate[dateKey].total += totalTok;
+      byDate[dateKey].turns += 1;
     }
 
     const turns = [];
@@ -298,7 +543,7 @@ export class QuotaTelemetryEngine {
       if (ev.model) activeModel = ev.model;
 
       if (!ev.hasTokens) continue;
-      if (ev.type !== 'PLANNER_RESPONSE' && ev.totalTok === 0) continue;
+      if (ev.atMs < retainTurnsCutoffMs) continue;
 
       let deltaSec = null;
       let genericCount = 0;
@@ -332,8 +577,6 @@ export class QuotaTelemetryEngine {
 
       const modelId = ev.model || activeModel || 'unknown';
       turns.push({
-        convId,
-        stepIndex: ev.stepIndex,
         atMs: ev.atMs,
         createdAt: ev.createdAt,
         model: modelId,
@@ -352,16 +595,29 @@ export class QuotaTelemetryEngine {
       convId,
       mtimeMs: stat.mtimeMs,
       size: stat.size,
+      input,
+      cacheRead,
+      output,
+      total: input + cacheRead + output,
+      turnsCount,
+      firstAtMs,
+      lastAtMs,
       lastEventAtMs,
       lastEventType,
       activeModel,
+      byDate,
       turns,
     };
   }
 
-  _scanRecentTranscripts(now) {
+  _scanAllTranscripts(now, switchLog) {
+    let cacheDirty = false;
     const seenIds = new Set();
-    const cutoffMs = now - STALE_FILE_CUTOFF_MS;
+
+    // Retain per-turn detail for turns within 8 days OR since the first account switch
+    const firstSwitchMs =
+      switchLog.length > 1 ? switchLog[1].fromMs : now - RECENT_TURN_HORIZON_MS;
+    const retainTurnsCutoffMs = Math.min(now - RECENT_TURN_HORIZON_MS, firstSwitchMs);
 
     if (fs.existsSync(this.brainDir)) {
       const entries = fs.readdirSync(this.brainDir, { withFileTypes: true });
@@ -383,22 +639,33 @@ export class QuotaTelemetryEngine {
           continue;
         }
 
-        if (stat.mtimeMs < cutoffMs) {
-          this.fileCache.delete(convId);
-          continue;
-        }
-
         seenIds.add(convId);
         const cached = this.fileCache.get(convId);
-        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+        const needsTurnUpgrade =
+          cached &&
+          stat.mtimeMs >= retainTurnsCutoffMs &&
+          !Array.isArray(cached.turns);
+
+        if (
+          cached &&
+          !needsTurnUpgrade &&
+          cached.mtimeMs === stat.mtimeMs &&
+          cached.size === stat.size
+        ) {
           continue;
         }
 
         try {
-          const parsed = this._parseTranscript(convId, transcriptPath, stat);
+          const parsed = this._parseTranscript(
+            convId,
+            transcriptPath,
+            stat,
+            retainTurnsCutoffMs
+          );
           this.fileCache.set(convId, parsed);
+          cacheDirty = true;
         } catch {
-          // Ignore unreadable partial files during live write
+          // Ignore unreadable file during live write
         }
       }
     }
@@ -406,7 +673,12 @@ export class QuotaTelemetryEngine {
     for (const id of [...this.fileCache.keys()]) {
       if (!seenIds.has(id)) {
         this.fileCache.delete(id);
+        cacheDirty = true;
       }
+    }
+
+    if (cacheDirty) {
+      this._saveDiskCache();
     }
   }
 
@@ -422,7 +694,6 @@ export class QuotaTelemetryEngine {
     let cycleStartMs = now - windowMs;
     if (hasResetAnchor) {
       if (rolledOver) {
-        // Compute current cycle start after the expired reset boundary
         const elapsedCycles = Math.floor((now - syncAnchor.resetAtMs) / windowMs);
         cycleStartMs = syncAnchor.resetAtMs + elapsedCycles * windowMs;
       } else {
@@ -517,19 +788,214 @@ export class QuotaTelemetryEngine {
     };
   }
 
-  getSnapshot() {
+  _buildUsageAggregation(config, scope, now) {
+    const today = toLocalDate(now);
+    const currentMonth = today.slice(0, 7);
+    const activeId = config.activeAccountId;
+    const switchLog = config.switchLog;
+    const isSingleDefault = switchLog.length === 1 && activeId === DEFAULT_ACCOUNT_ID;
+    const firstSwitchMs = switchLog.length > 1 ? switchLog[1].fromMs : Infinity;
+
+    const allTime = {
+      input: 0,
+      cacheRead: 0,
+      output: 0,
+      total: 0,
+      turns: 0,
+      conversations: 0,
+      activeDays: 0,
+      cacheHitRate: 0,
+    };
+
+    const dailyMap = new Map();
+    const monthlyMap = new Map();
+
+    const addDayBucket = (dateKey, convId, stats) => {
+      if (!dateKey || dateKey === 'unknown') return;
+      const monthKey = dateKey.slice(0, 7);
+
+      if (!dailyMap.has(dateKey)) {
+        dailyMap.set(dateKey, {
+          date: dateKey,
+          month: monthKey,
+          input: 0,
+          cacheRead: 0,
+          output: 0,
+          total: 0,
+          turns: 0,
+          convSet: new Set(),
+        });
+      }
+      const dm = dailyMap.get(dateKey);
+      dm.input += stats.input;
+      dm.cacheRead += stats.cacheRead;
+      dm.output += stats.output;
+      dm.total += stats.total;
+      dm.turns += stats.turns;
+      dm.convSet.add(convId);
+
+      if (!monthlyMap.has(monthKey)) {
+        monthlyMap.set(monthKey, {
+          month: monthKey,
+          input: 0,
+          cacheRead: 0,
+          output: 0,
+          total: 0,
+          turns: 0,
+          convSet: new Set(),
+          daySet: new Set(),
+        });
+      }
+      const mm = monthlyMap.get(monthKey);
+      mm.input += stats.input;
+      mm.cacheRead += stats.cacheRead;
+      mm.output += stats.output;
+      mm.total += stats.total;
+      mm.turns += stats.turns;
+      mm.convSet.add(convId);
+      mm.daySet.add(dateKey);
+    };
+
+    for (const entry of this.fileCache.values()) {
+      if (!entry.turnsCount || !entry.total) continue;
+
+      if (scope === 'all' || isSingleDefault || entry.lastAtMs < firstSwitchMs) {
+        if (scope === 'account' && activeId !== DEFAULT_ACCOUNT_ID && entry.lastAtMs < firstSwitchMs) {
+          continue;
+        }
+        allTime.input += entry.input;
+        allTime.cacheRead += entry.cacheRead;
+        allTime.output += entry.output;
+        allTime.total += entry.total;
+        allTime.turns += entry.turnsCount;
+        allTime.conversations += 1;
+
+        for (const [dateKey, dStats] of Object.entries(entry.byDate || {})) {
+          addDayBucket(dateKey, entry.convId, dStats);
+        }
+        continue;
+      }
+
+      // Account-scoped mixed conversation spanning switches
+      const convDateMap = new Map();
+      let convMatched = false;
+
+      for (const t of entry.turns || []) {
+        if (resolveAccountForTimestamp(t.atMs, switchLog) !== activeId) continue;
+        convMatched = true;
+        allTime.input += t.input;
+        allTime.cacheRead += t.cacheRead;
+        allTime.output += t.output;
+        allTime.total += t.total;
+        allTime.turns += 1;
+
+        const dk = toLocalDate(t.atMs);
+        if (!convDateMap.has(dk)) {
+          convDateMap.set(dk, { input: 0, cacheRead: 0, output: 0, total: 0, turns: 0 });
+        }
+        const ds = convDateMap.get(dk);
+        ds.input += t.input;
+        ds.cacheRead += t.cacheRead;
+        ds.output += t.output;
+        ds.total += t.total;
+        ds.turns += 1;
+      }
+
+      if (convMatched) {
+        allTime.conversations += 1;
+        for (const [dk, ds] of convDateMap.entries()) {
+          addDayBucket(dk, entry.convId, ds);
+        }
+      }
+    }
+
+    allTime.activeDays = dailyMap.size;
+    allTime.cacheHitRate = calcCacheHitRate(allTime.input, allTime.cacheRead);
+
+    const daily = [...dailyMap.values()]
+      .map((d) => ({
+        date: d.date,
+        month: d.month,
+        input: d.input,
+        cacheRead: d.cacheRead,
+        output: d.output,
+        total: d.total,
+        turns: d.turns,
+        conversations: d.convSet.size,
+        cacheHitRate: calcCacheHitRate(d.input, d.cacheRead),
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const monthly = [...monthlyMap.values()]
+      .map((m) => ({
+        month: m.month,
+        input: m.input,
+        cacheRead: m.cacheRead,
+        output: m.output,
+        total: m.total,
+        turns: m.turns,
+        conversations: m.convSet.size,
+        activeDays: m.daySet.size,
+        cacheHitRate: calcCacheHitRate(m.input, m.cacheRead),
+      }))
+      .sort((a, b) => b.month.localeCompare(a.month));
+
+    const todaySummary = daily.find((d) => d.date === today) || {
+      date: today,
+      month: currentMonth,
+      input: 0,
+      cacheRead: 0,
+      output: 0,
+      total: 0,
+      turns: 0,
+      conversations: 0,
+      cacheHitRate: 0,
+    };
+
+    const thisMonthSummary = monthly.find((m) => m.month === currentMonth) || {
+      month: currentMonth,
+      input: 0,
+      cacheRead: 0,
+      output: 0,
+      total: 0,
+      turns: 0,
+      conversations: 0,
+      activeDays: 0,
+      cacheHitRate: 0,
+    };
+
+    return {
+      scope,
+      timeZone: LOCAL_TZ,
+      today: todaySummary,
+      thisMonth: thisMonthSummary,
+      allTime,
+      daily: daily.slice(0, 30),
+      monthly,
+    };
+  }
+
+  getSnapshot({ scope = 'account' } = {}) {
     const startMs = Date.now();
     const now = startMs;
-    this._scanRecentTranscripts(now);
-    const config = this.loadConfig();
+    const normalizedScope = scope === 'all' ? 'all' : 'account';
 
+    const config = this.loadConfig();
+    this._scanAllTranscripts(now, config.switchLog);
+
+    const activeAccount = config.accounts[config.activeAccountId];
     const turnsByBucket = new Map(MODEL_BUCKETS.map((b) => [b.id, []]));
     const allSpeedTurns = [];
     const recentTurnsAll = [];
     let freshestConv = null;
     let latestPlannerTurn = null;
+    const recentHorizonCutoff = now - RECENT_TURN_HORIZON_MS;
 
     for (const entry of this.fileCache.values()) {
+      if (entry.mtimeMs < recentHorizonCutoff && entry.lastEventAtMs < recentHorizonCutoff) {
+        continue;
+      }
+
       if (
         !freshestConv ||
         Math.max(entry.mtimeMs, entry.lastEventAtMs) >
@@ -538,15 +1004,21 @@ export class QuotaTelemetryEngine {
         freshestConv = entry;
       }
 
-      for (const t of entry.turns) {
-        const list = turnsByBucket.get(t.bucketId);
-        if (list) list.push(t);
+      for (const t of entry.turns || []) {
+        if (t.atMs < recentHorizonCutoff) continue;
+
         recentTurnsAll.push(t);
         if (t.tokPerSec !== null && t.atMs >= now - 86400 * 1000) {
           allSpeedTurns.push(t);
         }
         if (!latestPlannerTurn || t.atMs > latestPlannerTurn.atMs) {
           latestPlannerTurn = t;
+        }
+
+        // Only attribute turns to the active account's quota pool!
+        if (resolveAccountForTimestamp(t.atMs, config.switchLog) === config.activeAccountId) {
+          const list = turnsByBucket.get(t.bucketId);
+          if (list) list.push(t);
         }
       }
     }
@@ -615,7 +1087,7 @@ export class QuotaTelemetryEngine {
     const buckets = [];
     for (const def of MODEL_BUCKETS) {
       const bTurns = turnsByBucket.get(def.id) || [];
-      const bCfg = config.buckets[def.id] || {};
+      const bCfg = activeAccount.buckets[def.id] || {};
       const w5h = this._computeWindowStats(
         bTurns,
         bCfg.limit5h,
@@ -659,6 +1131,29 @@ export class QuotaTelemetryEngine {
       });
     }
 
+    // Check if active account needs View Usage verification
+    let lastSwitchInMs = 0;
+    for (const seg of config.switchLog) {
+      if (seg.accountId === config.activeAccountId && seg.fromMs > lastSwitchInMs) {
+        lastSwitchInMs = seg.fromMs;
+      }
+    }
+    const geminiBucket = buckets.find((b) => b.id === 'gemini-models');
+    const geminiSync5hMs = activeAccount.buckets['gemini-models']?.sync5h?.syncedAtMs || 0;
+    const geminiSync7dMs = activeAccount.buckets['gemini-models']?.sync7d?.syncedAtMs || 0;
+    const latestGeminiSyncMs = Math.max(geminiSync5hMs, geminiSync7dMs);
+    const hasValidSync = Boolean(
+      geminiBucket &&
+        (geminiBucket.w5h.sourceMode === 'synced' || geminiBucket.w7d.sourceMode === 'synced')
+    );
+    const needsSync = !hasValidSync || (lastSwitchInMs > 0 && latestGeminiSyncMs < lastSwitchInMs);
+
+    const usage = this._buildUsageAggregation(config, normalizedScope, now);
+    const machineUsage =
+      normalizedScope === 'all'
+        ? usage
+        : this._buildUsageAggregation(config, 'all', now);
+
     return {
       generatedAt: new Date(now).toISOString(),
       scanDurationMs: Date.now() - startMs,
@@ -666,6 +1161,26 @@ export class QuotaTelemetryEngine {
       activeModel: formatModelName(activeModelId),
       activeModelId,
       activeBucketId,
+      account: {
+        activeId: config.activeAccountId,
+        activeLabel: activeAccount.label,
+        needsSync,
+        lastSwitchedAt: lastSwitchInMs > 0 ? new Date(lastSwitchInMs).toISOString() : '',
+        accounts: Object.values(config.accounts).map((a) => ({
+          id: a.id,
+          label: a.label,
+          isDefault: a.id === DEFAULT_ACCOUNT_ID,
+          hasSync: Boolean(
+            a.buckets['gemini-models']?.sync5h || a.buckets['gemini-models']?.sync7d
+          ),
+        })),
+      },
+      usage,
+      machineTotals: {
+        today: machineUsage.today,
+        thisMonth: machineUsage.thisMonth,
+        allTime: machineUsage.allTime,
+      },
       speed: {
         currentTokPerSec,
         lastKnownTokPerSec,

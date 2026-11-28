@@ -1,5 +1,5 @@
 /* Hallmark · shape: app screen · genre: modern-minimal · theme: pixel-telemetry · signature: pixel-speedometer-diorama · v2.0.0 */
-/* critique: Compact real-time Antigravity quota clock and token-per-second telemetry HUD with reactive pixel cockpit, SVG gauges, tabular figures, and zero AI-slop ornament. */
+/* critique: Real-time per-account Antigravity quota clock, token-per-second telemetry, and daily/monthly/all-time cache hit dashboard with reactive pixel cockpit and zero AI-slop ornament. */
 
 :root {
   --bg-primary: var(--color-background-primary, #111318);
@@ -10,6 +10,7 @@
   --text-tertiary: var(--color-text-tertiary, #7b8496);
   --border-primary: var(--color-border-primary, #282e3a);
   --border-secondary: var(--color-border-secondary, #1f242e);
+  --border-field: #5f6a82;
   --ring-primary: var(--color-ring-primary, #10b981);
 
   --accent-emerald: #10b981;
@@ -33,7 +34,7 @@
   --px-floor: #1c2132;
   --px-desk-top: #3a2d28;
   --px-desk-edge: #261c18;
-  --px-frame: #0f172a;
+  --px-frame: #131a2a;
   --px-screen: #091522;
   --px-star: #fef08a;
   --px-star-dim: #5d6a80;
@@ -73,6 +74,7 @@
   --text-tertiary: var(--color-text-tertiary, #596375);
   --border-primary: var(--color-border-primary, #d5dce6);
   --border-secondary: var(--color-border-secondary, #e4e9f0);
+  --border-field: #6b768c;
 
   --accent-emerald: #047857;
   --accent-emerald-soft: rgba(4, 120, 87, 0.12);
@@ -180,7 +182,8 @@ html, body {
   flex-wrap: wrap;
 }
 
-.window-switch {
+.scope-switch,
+.history-tabs {
   display: inline-flex;
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
@@ -206,7 +209,7 @@ html, body {
 }
 
 .ctrl-btn {
-  background: var(--bg-secondary);
+  background: transparent;
   border-color: var(--border-primary);
   color: var(--text-primary);
 }
@@ -218,7 +221,6 @@ html, body {
 }
 
 .ctrl-btn.is-live {
-  background: var(--accent-emerald-soft);
   border-color: var(--accent-emerald);
   color: var(--accent-emerald);
 }
@@ -264,6 +266,84 @@ html, body {
   transition: none;
 }
 
+/* Account Switcher Bar */
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+}
+
+.account-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.account-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.account-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.account-select {
+  min-width: 156px;
+  height: 32px;
+}
+
+.new-account-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-cyan);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.new-account-form {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.new-account-field {
+  flex: 1;
+  min-width: 220px;
+}
+
+.new-account-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sync-alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-amber-soft);
+  border: 1px solid var(--accent-amber);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -278,11 +358,13 @@ html, body {
 }
 
 .error-banner[hidden],
+.sync-alert-banner[hidden],
+.new-account-panel[hidden],
 .calib-panel[hidden] {
   display: none;
 }
 
-/* Cockpit: Speedometer + Pixel Animation side by side (stacks on narrow Side Pane) */
+/* Cockpit: Speedometer + Pixel Animation side by side */
 .cockpit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
@@ -525,7 +607,8 @@ html, body {
   flex-shrink: 0;
 }
 
-/* Section Toolbars */
+/* Usage KPI Strip (Today / Month / All-Time / Cache Hit) */
+.usage-section,
 .quota-section,
 .turns-section {
   display: flex;
@@ -535,7 +618,7 @@ html, body {
 
 .section-toolbar {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
   flex-wrap: wrap;
@@ -548,7 +631,84 @@ html, body {
   color: var(--text-primary);
 }
 
-/* Quota Clocks Grid — flat single-layer tiles, never card-in-card */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-3);
+}
+
+.kpi-tile {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.kpi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.kpi-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kpi-badge {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-emerald);
+}
+
+.kpi-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.kpi-breakdown {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composition-track {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  height: 6px;
+  border-radius: 999px;
+  background: var(--gauge-track);
+  overflow: hidden;
+  gap: 2px;
+}
+
+.comp-seg {
+  display: block;
+  height: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--dur-gauge) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.comp-in { background: var(--accent-amber); }
+.comp-cache { background: var(--accent-emerald); }
+.comp-out { background: var(--accent-cyan); }
+
+/* Quota Clocks Grid — flat single-layer tiles */
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -782,11 +942,11 @@ html, body {
 .field-input {
   height: 34px;
   padding: 0 var(--space-3);
-  border: 1px solid var(--border-primary);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 13px;
 }
 
@@ -797,7 +957,7 @@ html, body {
   flex-wrap: wrap;
 }
 
-/* Recent Turns Speed Table */
+/* History & Recent Turns Table */
 .table-wrap {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
@@ -902,7 +1062,7 @@ html, body {
   .gauge-arc-active,
   .gauge-needle,
   .clock-ring-val,
-  .quota-bar-fill {
+  .comp-seg {
     transition: none;
   }
 }

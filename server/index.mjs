@@ -49,6 +49,8 @@ function fmtCountdown(sec) {
 
 function formatSummaryText(snapshot) {
   const sp = snapshot.speed;
+  const acc = snapshot.account;
+  const u = snapshot.usage;
   const speedStr =
     sp.currentTokPerSec > 0
       ? `${sp.currentTokPerSec} tok/s (live)`
@@ -56,10 +58,13 @@ function formatSummaryText(snapshot) {
         ? `${sp.lastKnownTokPerSec} tok/s (lần gần nhất)`
         : 'Chưa có mẫu';
 
+  const syncWarn = acc.needsSync
+    ? 'CẦN KIỂM TRA LẠI View Usage trên acc này'
+    : 'Đã đồng bộ trên acc này';
+
   const lines = [
-    'Quota & Speed Meter (2 nhóm quota dùng chung)',
+    `Quota & Speed Meter (${acc.activeLabel}, ${syncWarn})`,
     `- Tốc độ hiện tại: ${speedStr} | Trung bình: ${sp.avgTokPerSec} tok/s | Đỉnh 5h: ${sp.peakTokPerSec} tok/s | Tốc độ 5m: ${fmtCompact(sp.tokensPerMin5m)} out/phút`,
-    `- Model gần nhất: ${snapshot.activeModel || 'Chưa xác định'} (trạng thái: ${snapshot.activityState})`,
   ];
 
   for (const b of snapshot.buckets) {
@@ -69,6 +74,19 @@ function formatSummaryText(snapshot) {
       `- ${b.label}: 5h còn ${b.w5h.remainingPct}% (${tag5h}, ${fmtCompact(b.w5h.total)}/${fmtCompact(b.w5h.limit)}, reset ${fmtCountdown(b.w5h.nextResetInSec)}) | Tuần còn ${b.w7d.remainingPct}% (${tag7d}, ${fmtCompact(b.w7d.total)}/${fmtCompact(b.w7d.limit)}, reset ${fmtCountdown(b.w7d.nextResetInSec)})`
     );
   }
+
+  const scopeLabel = u.scope === 'all' ? 'Toàn máy' : acc.activeLabel;
+  lines.push(`Thống kê Token & Cache Hit (${scopeLabel}):`);
+  lines.push(
+    `- Hôm nay (${u.today.date}): ${fmtCompact(u.today.total)} (Input mới ${fmtCompact(u.today.input)} | Cache Read ${fmtCompact(u.today.cacheRead)} | Output ${fmtCompact(u.today.output)} | Cache Hit ${u.today.cacheHitRate}% | ${u.today.turns} lượt)`
+  );
+  lines.push(
+    `- Tháng này (${u.thisMonth.month}): ${fmtCompact(u.thisMonth.total)} (Input mới ${fmtCompact(u.thisMonth.input)} | Cache Read ${fmtCompact(u.thisMonth.cacheRead)} | Output ${fmtCompact(u.thisMonth.output)} | Cache Hit ${u.thisMonth.cacheHitRate}% | ${u.thisMonth.activeDays} ngày)`
+  );
+  lines.push(
+    `- Tổng từ trước đến giờ: ${fmtCompact(u.allTime.total)} (Input mới ${fmtCompact(u.allTime.input)} | Cache Read ${fmtCompact(u.allTime.cacheRead)} | Output ${fmtCompact(u.allTime.output)} | Cache Hit ${u.allTime.cacheHitRate}% | ${u.allTime.conversations} hội thoại, ${u.allTime.activeDays} ngày)`
+  );
+
   return lines.join('\n');
 }
 
@@ -91,7 +109,7 @@ const engine = new QuotaTelemetryEngine({
 const server = new McpServer(
   {
     name: 'quota-meter',
-    version: '1.1.0',
+    version: '2.0.0',
   },
   {
     capabilities: {
@@ -105,7 +123,7 @@ server.registerResource(
   'Quota & Speed Meter HUD',
   APP_URI,
   {
-    description: 'Real-time shared-pool quota clocks (5h & Weekly) and live tokens/sec telemetry HUD with pixel-art animation.',
+    description: 'Real-time per-account quota clocks, live tokens/sec telemetry, and all-time/monthly/daily token & cache hit analytics.',
     mimeType: APP_MIME_TYPE,
     _meta: {
       ui: {
@@ -134,12 +152,16 @@ server.registerTool(
   {
     title: 'Quota Meter',
     description:
-      'Open the real-time Quota & Speed Meter HUD showing shared Gemini and Claude/GPT quota clocks (5h & Weekly), live tokens/sec speedometer, and pixel animation.',
+      'Open the real-time Quota & Speed Meter HUD with per-account quota isolation, live tok/s speedometer, and daily/monthly/all-time token & cache hit statistics.',
     inputSchema: z.object({
       bucket: z
         .string()
         .optional()
         .describe('Optional bucket ID to highlight or calibrate'),
+      scope: z
+        .enum(['account', 'all'])
+        .optional()
+        .describe('Usage aggregation scope: account (default) or all'),
     }),
     _meta: {
       ui: {
@@ -154,12 +176,14 @@ server.registerTool(
     },
   },
   async (args = {}) => {
-    const snapshot = engine.getSnapshot();
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
     return {
       content: [{ type: 'text', text: formatSummaryText(snapshot) }],
       structuredContent: {
         initialParams: {
           bucket: args.bucket || '',
+          scope,
         },
         snapshot,
       },
@@ -170,13 +194,19 @@ server.registerTool(
 server.registerTool(
   'get_quota_snapshot',
   {
-    title: 'Get Quota & Speed Snapshot',
+    title: 'Get Quota & Token Usage Snapshot',
     description:
-      'Query real-time shared-pool quota usage (5h & Weekly), reset countdowns, and live tokens/sec speed.',
-    inputSchema: z.object({}),
+      'Query per-account quota clocks, live tokens/sec, and exact today/monthly/all-time token usage with cache hit percentage.',
+    inputSchema: z.object({
+      scope: z
+        .enum(['account', 'all'])
+        .optional()
+        .describe('Usage scope: account (current profile) or all (all transcripts on machine)'),
+    }),
   },
-  async () => {
-    const snapshot = engine.getSnapshot();
+  async (args = {}) => {
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
     return {
       content: [{ type: 'text', text: formatSummaryText(snapshot) }],
       structuredContent: snapshot,
@@ -188,18 +218,49 @@ server.registerTool(
   'app_poll_telemetry',
   {
     title: 'Poll Live Telemetry',
-    description: 'Internal app-only tool to poll live quota and token/s telemetry.',
-    inputSchema: z.object({}),
+    description: 'Internal app-only tool to poll live quota, usage stats, and token/s telemetry.',
+    inputSchema: z.object({
+      scope: z.enum(['account', 'all']).optional(),
+    }),
     _meta: {
       ui: {
         visibility: ['app'],
       },
     },
   },
-  async () => {
-    const snapshot = engine.getSnapshot();
+  async (args = {}) => {
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
     return {
       content: [{ type: 'text', text: 'OK' }],
+      structuredContent: snapshot,
+    };
+  }
+);
+
+server.registerTool(
+  'app_manage_account',
+  {
+    title: 'Manage Account Profile',
+    description: 'Internal app-only tool to create, switch, rename, or delete isolated account profiles.',
+    inputSchema: z.object({
+      action: z.enum(['create', 'switch', 'rename', 'delete']),
+      accountId: z.string().optional(),
+      label: z.string().optional(),
+      scope: z.enum(['account', 'all']).optional(),
+    }),
+    _meta: {
+      ui: {
+        visibility: ['app'],
+      },
+    },
+  },
+  async (args) => {
+    engine.manageAccount(args);
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
+    return {
+      content: [{ type: 'text', text: 'Account updated' }],
       structuredContent: snapshot,
     };
   }
@@ -209,7 +270,7 @@ server.registerTool(
   'app_save_quota_config',
   {
     title: 'Save Quota Calibration',
-    description: 'Internal app-only tool to calibrate remaining quota %, reset countdown, or token limits per shared pool.',
+    description: 'Internal app-only tool to calibrate remaining quota %, reset countdown, or token limits for the active account.',
     inputSchema: z.object({
       bucketId: z.enum(VALID_BUCKET_IDS),
       limit5h: z.number().positive().optional(),
@@ -217,6 +278,7 @@ server.registerTool(
       syncWindow: z.enum(['5h', '7d']).optional(),
       syncRemainingPct: z.number().min(0).max(100).optional(),
       syncResetInSec: z.number().nonnegative().optional(),
+      scope: z.enum(['account', 'all']).optional(),
     }),
     _meta: {
       ui: {
@@ -226,7 +288,8 @@ server.registerTool(
   },
   async (args) => {
     engine.saveBucketConfig(args);
-    const snapshot = engine.getSnapshot();
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
     return {
       content: [{ type: 'text', text: 'Saved' }],
       structuredContent: snapshot,
@@ -238,9 +301,10 @@ server.registerTool(
   'app_reset_quota_config',
   {
     title: 'Reset Quota Calibration',
-    description: 'Internal app-only tool to reset quota calibration for one or all shared pools.',
+    description: 'Internal app-only tool to reset quota calibration for one or all pools on the active account.',
     inputSchema: z.object({
       bucketId: z.enum(VALID_BUCKET_IDS).optional(),
+      scope: z.enum(['account', 'all']).optional(),
     }),
     _meta: {
       ui: {
@@ -250,7 +314,8 @@ server.registerTool(
   },
   async (args = {}) => {
     engine.resetConfig(args.bucketId);
-    const snapshot = engine.getSnapshot();
+    const scope = args.scope === 'all' ? 'all' : 'account';
+    const snapshot = engine.getSnapshot({ scope });
     return {
       content: [{ type: 'text', text: 'Reset' }],
       structuredContent: snapshot,
