@@ -68,10 +68,10 @@ function formatSummaryText(snapshot) {
   ];
 
   for (const b of snapshot.buckets) {
-    const tag5h = b.w5h.sourceMode === 'synced' ? 'đã đồng bộ' : 'mốc mặc định';
-    const tag7d = b.w7d.sourceMode === 'synced' ? 'đã đồng bộ' : 'mốc mặc định';
+    const tag5h = b.w5h.sourceMode === 'synced' ? 'đã đồng bộ' : 'chưa đồng bộ';
+    const tag7d = b.w7d.sourceMode === 'synced' ? 'đã đồng bộ' : 'chưa đồng bộ';
     lines.push(
-      `- ${b.label}: 5h còn ${b.w5h.remainingPct}% (${tag5h}, ${fmtCompact(b.w5h.total)}/${fmtCompact(b.w5h.limit)}, reset ${fmtCountdown(b.w5h.nextResetInSec)}) | Tuần còn ${b.w7d.remainingPct}% (${tag7d}, ${fmtCompact(b.w7d.total)}/${fmtCompact(b.w7d.limit)}, reset ${fmtCountdown(b.w7d.nextResetInSec)})`
+      `- ${b.label}: 5h còn ${b.w5h.remainingPct}% (${tag5h}, ${fmtCompact(b.w5h.quotaUnits)} eq / ${fmtCompact(b.w5h.limit)}, reset ${fmtCountdown(b.w5h.nextResetInSec)}) | Tuần còn ${b.w7d.remainingPct}% (${tag7d}, ${fmtCompact(b.w7d.quotaUnits)} eq / ${fmtCompact(b.w7d.limit)}, reset ${fmtCountdown(b.w7d.nextResetInSec)})`
     );
   }
 

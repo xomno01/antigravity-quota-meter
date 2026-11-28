@@ -355,7 +355,7 @@ function renderClockSlot(title, w) {
         </div>
         <div class="clock-pct-row">
           <span class="clock-pct">${pct.toFixed(1)}%</span>
-          <span class="clock-usage-line">${fmtCompact(w.total)} / ${fmtCompact(w.limit)}</span>
+          <span class="clock-usage-line">${fmtCompact(w.quotaUnits)} eq / ${fmtCompact(w.limit)}</span>
         </div>
         <span class="clock-reset-line" data-reset-base="${w.nextResetInSec}">Reset: ${fmtCountdown(resetSec)}</span>
       </div>

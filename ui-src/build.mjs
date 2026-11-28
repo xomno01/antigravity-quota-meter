@@ -92,15 +92,15 @@ async function build() {
     <section class="cockpit-grid" aria-label="Buồng lái tốc độ và nhân vật pixel">
       <div class="speed-panel">
         <div class="speed-dial-wrap">
-          <svg class="speed-gauge-svg" viewBox="0 0 180 118" aria-label="Đồng hồ tốc độ token mỗi giây">
-            <path class="gauge-arc-track" d="M 24 96 A 70 70 0 1 1 156 96" />
-            <path class="gauge-arc-active" id="speed-arc" d="M 24 96 A 70 70 0 1 1 156 96" />
+          <svg class="speed-gauge-svg" viewBox="0 0 180 122" aria-label="Đồng hồ tốc độ token mỗi giây">
+            <path class="gauge-arc-track" d="M 24 88 A 70 70 0 1 1 156 88" />
+            <path class="gauge-arc-active" id="speed-arc" d="M 24 88 A 70 70 0 1 1 156 88" />
             <g class="gauge-needle" id="speed-needle">
-              <line x1="90" y1="86" x2="90" y2="28" />
-              <circle cx="90" cy="86" r="5" />
+              <line x1="90" y1="72" x2="90" y2="30" />
+              <circle cx="90" cy="72" r="4.5" />
             </g>
-            <text class="gauge-readout-val" x="90" y="72" text-anchor="middle" id="speed-current">0.0</text>
-            <text class="gauge-readout-unit" x="90" y="108" text-anchor="middle">tok/s</text>
+            <text class="gauge-readout-val" x="90" y="99" text-anchor="middle" id="speed-current">0.0</text>
+            <text class="gauge-readout-unit" x="90" y="115" text-anchor="middle">tok/s</text>
           </svg>
           <div class="speed-meta-col">
             <div class="speed-state-row">

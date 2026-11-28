@@ -31,24 +31,24 @@ export const MODEL_BUCKETS = [
     id: 'gemini-models',
     label: 'Gemini Models',
     shortLabel: 'Gemini',
-    defaultLimit5h: 100_000_000,
-    defaultLimit7d: 780_000_000,
+    defaultLimit5h: 55_000_000,
+    defaultLimit7d: 980_000_000,
     iconType: 'gemini',
   },
   {
     id: 'claude-gpt',
     label: 'Claude and GPT models',
     shortLabel: 'Claude & GPT',
-    defaultLimit5h: 60_000_000,
-    defaultLimit7d: 450_000_000,
+    defaultLimit5h: 35_000_000,
+    defaultLimit7d: 600_000_000,
     iconType: 'claude',
   },
   {
     id: 'other',
     label: 'Khác / Legacy',
     shortLabel: 'Khác',
-    defaultLimit5h: 100_000_000,
-    defaultLimit7d: 780_000_000,
+    defaultLimit5h: 55_000_000,
+    defaultLimit7d: 980_000_000,
     iconType: 'other',
   },
 ];
@@ -120,6 +120,10 @@ function calcCacheHitRate(input, cacheRead) {
   const totalIn = input + cacheRead;
   if (totalIn <= 0) return 0;
   return round1((cacheRead / totalIn) * 100);
+}
+
+export function calcQuotaUnits(input, cacheRead, output) {
+  return Math.round(Number(input || 0) + Number(cacheRead || 0) * 0.1 + Number(output || 0) * 5);
 }
 
 function sanitizeLabel(label, fallback = 'Tài khoản') {
@@ -691,15 +695,10 @@ export class QuotaTelemetryEngine {
     const hasResetAnchor = Boolean(syncAnchor && Number.isFinite(syncAnchor.resetAtMs));
     const rolledOver = Boolean(hasResetAnchor && now >= syncAnchor.resetAtMs);
 
-    let cycleStartMs = now - windowMs;
-    if (hasResetAnchor) {
-      if (rolledOver) {
-        const elapsedCycles = Math.floor((now - syncAnchor.resetAtMs) / windowMs);
-        cycleStartMs = syncAnchor.resetAtMs + elapsedCycles * windowMs;
-      } else {
-        cycleStartMs = syncAnchor.resetAtMs - windowMs;
-      }
-    }
+    // When a synced reset boundary has already passed, discard the stale anchor
+    // and fall back to the true sliding window [now - windowMs, now].
+    const cycleStartMs =
+      hasResetAnchor && !rolledOver ? syncAnchor.resetAtMs - windowMs : now - windowMs;
 
     const syncValid = Boolean(
       syncAnchor &&
@@ -713,23 +712,26 @@ export class QuotaTelemetryEngine {
     let cacheRead = 0;
     let output = 0;
     let total = 0;
+    let quotaUnits = 0;
     let turnCount = 0;
     let oldestAtMs = 0;
-    let deltaSinceSync = 0;
+    let deltaUnitsSinceSync = 0;
     const subModelMap = new Map();
 
     for (const t of turns) {
       if (t.atMs < cycleStartMs) continue;
+      const units = calcQuotaUnits(t.input, t.cacheRead, t.output);
       input += t.input;
       cacheRead += t.cacheRead;
       output += t.output;
       total += t.total;
+      quotaUnits += units;
       turnCount += 1;
       if (!oldestAtMs || t.atMs < oldestAtMs) {
         oldestAtMs = t.atMs;
       }
       if (syncValid && t.atMs > syncAnchor.syncedAtMs) {
-        deltaSinceSync += t.total;
+        deltaUnitsSinceSync += units;
       }
       const prev = subModelMap.get(t.modelLabel) || { model: t.modelLabel, total: 0, turns: 0 };
       prev.total += t.total;
@@ -746,10 +748,6 @@ export class QuotaTelemetryEngine {
     if (hasResetAnchor && !rolledOver) {
       nextResetInSec = Math.max(0, Math.round((syncAnchor.resetAtMs - now) / 1000));
       nextResetAt = new Date(syncAnchor.resetAtMs).toISOString();
-    } else if (hasResetAnchor && rolledOver) {
-      const nextBoundary = cycleStartMs + windowMs;
-      nextResetInSec = Math.max(0, Math.round((nextBoundary - now) / 1000));
-      nextResetAt = new Date(nextBoundary).toISOString();
     } else if (oldestAtMs) {
       nextResetInSec = Math.max(0, Math.round((oldestAtMs + windowMs - now) / 1000));
       nextResetAt = new Date(oldestAtMs + windowMs).toISOString();
@@ -760,12 +758,12 @@ export class QuotaTelemetryEngine {
     let sourceMode;
 
     if (syncValid) {
-      const usedDeltaPct = (deltaSinceSync / limit) * 100;
+      const usedDeltaPct = (deltaUnitsSinceSync / limit) * 100;
       remainingPct = clamp(round1(syncAnchor.syncedRemainingPct - usedDeltaPct), 0, 100);
       usedPct = round1(100 - remainingPct);
       sourceMode = 'synced';
     } else {
-      usedPct = round1(clamp((total / limit) * 100, 0, 100));
+      usedPct = round1(clamp((quotaUnits / limit) * 100, 0, 100));
       remainingPct = clamp(round1(100 - usedPct), 0, 100);
       sourceMode = 'window';
     }
@@ -776,6 +774,7 @@ export class QuotaTelemetryEngine {
       cacheRead,
       output,
       total,
+      quotaUnits,
       turns: turnCount,
       cacheHitRate: calcCacheHitRate(input, cacheRead),
       usedPct,
@@ -1141,12 +1140,13 @@ export class QuotaTelemetryEngine {
     const geminiBucket = buckets.find((b) => b.id === 'gemini-models');
     const geminiSync5hMs = activeAccount.buckets['gemini-models']?.sync5h?.syncedAtMs || 0;
     const geminiSync7dMs = activeAccount.buckets['gemini-models']?.sync7d?.syncedAtMs || 0;
-    const latestGeminiSyncMs = Math.max(geminiSync5hMs, geminiSync7dMs);
-    const hasValidSync = Boolean(
+    const bothSynced = Boolean(
       geminiBucket &&
-        (geminiBucket.w5h.sourceMode === 'synced' || geminiBucket.w7d.sourceMode === 'synced')
+        geminiBucket.w5h.sourceMode === 'synced' &&
+        geminiBucket.w7d.sourceMode === 'synced'
     );
-    const needsSync = !hasValidSync || (lastSwitchInMs > 0 && latestGeminiSyncMs < lastSwitchInMs);
+    const minGeminiSyncMs = Math.min(geminiSync5hMs, geminiSync7dMs);
+    const needsSync = !bothSynced || (lastSwitchInMs > 0 && minGeminiSyncMs < lastSwitchInMs);
 
     const usage = this._buildUsageAggregation(config, normalizedScope, now);
     const machineUsage =

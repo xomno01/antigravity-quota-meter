@@ -420,7 +420,7 @@ html, body {
 }
 
 .gauge-needle {
-  transform-origin: 90px 86px;
+  transform-origin: 90px 72px;
   transform: rotate(-110deg);
   transition: transform var(--dur-gauge) cubic-bezier(0.22, 1, 0.36, 1);
 }
